@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/go-crm/services/internal/auth"
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/database"
 )
@@ -40,9 +41,9 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// TODO: mount domain routers, e.g.
-	//   r.Mount("/api/v1/auth", auth.NewHandler(pool, cfg).Routes())
-	//   r.Mount("/api/v1/contacts", contacts.NewHandler(pool).Routes())
+	// Domain modules register their sub-routers here.
+	r.Mount("/api/v1/auth", auth.NewHandler(pool, cfg).Routes())
+	// TODO: r.Mount("/api/v1/contacts", contacts.NewHandler(pool).Routes())
 
 	srv := &http.Server{
 		Addr:              cfg.GatewayAddr,

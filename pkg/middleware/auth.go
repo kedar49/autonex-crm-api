@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -23,8 +24,12 @@ func RequireJWT(secret string) func(http.Handler) http.Handler {
 			}
 
 			token, err := jwt.Parse(raw, func(t *jwt.Token) (interface{}, error) {
+				// Enforce HMAC to prevent alg-confusion (e.g. "none" / RS256) attacks.
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+				}
 				return []byte(secret), nil
-			})
+			}, jwt.WithValidMethods([]string{"HS256"}))
 			if err != nil || !token.Valid {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
