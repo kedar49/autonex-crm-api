@@ -15,6 +15,7 @@ import (
 	"github.com/go-crm/services/internal/auth"
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/database"
+	appmw "github.com/go-crm/services/pkg/middleware"
 )
 
 // Gateway is the HTTP API edge. Domain modules register their routes here.
@@ -35,6 +36,8 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// Allow the browser SPA (cfg.WebAppURL) to call the API cross-origin.
+	r.Use(appmw.CORS(cfg.WebAppURL))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
