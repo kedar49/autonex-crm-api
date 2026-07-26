@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/pkg/config"
+	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
 
@@ -61,14 +62,14 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, user, err := h.svc.Register(r.Context(), in.Email, in.Password)
 	if errors.Is(err, ErrEmailTaken) {
-		writeError(w, http.StatusConflict, "email already registered")
+		httpx.WriteError(w, http.StatusConflict, "email already registered")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not create account")
+		httpx.WriteError(w, http.StatusInternalServerError, "could not create account")
 		return
 	}
-	writeJSON(w, http.StatusCreated, authResponse{Token: tok, User: user})
+	httpx.WriteJSON(w, http.StatusCreated, authResponse{Token: tok, User: user})
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -78,14 +79,14 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, user, err := h.svc.Login(r.Context(), in.Email, in.Password)
 	if errors.Is(err, ErrInvalidCredentials) {
-		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		httpx.WriteError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "login failed")
+		httpx.WriteError(w, http.StatusInternalServerError, "login failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, authResponse{Token: tok, User: user})
+	httpx.WriteJSON(w, http.StatusOK, authResponse{Token: tok, User: user})
 }
 
 func (h *Handler) ssoStart(w http.ResponseWriter, r *http.Request) {
@@ -93,16 +94,16 @@ func (h *Handler) ssoStart(w http.ResponseWriter, r *http.Request) {
 
 	state, err := randomState()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	authURL, err := h.svc.AuthCodeURL(provider, state)
 	if errors.Is(err, ErrUnknownProvider) {
-		writeError(w, http.StatusNotFound, "unknown or unconfigured provider")
+		httpx.WriteError(w, http.StatusNotFound, "unknown or unconfigured provider")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal error")
+		httpx.WriteError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -124,7 +125,7 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 	// CSRF: the state echoed by the provider must match the cookie we set.
 	cookie, err := r.Cookie(ssoStateCookie)
 	if err != nil || cookie.Value == "" || cookie.Value != r.URL.Query().Get("state") {
-		writeError(w, http.StatusBadRequest, "invalid state")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
 	// Consume the state cookie.
@@ -132,20 +133,20 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		writeError(w, http.StatusBadRequest, "missing authorization code")
+		httpx.WriteError(w, http.StatusBadRequest, "missing authorization code")
 		return
 	}
 
 	token, err := h.svc.CompleteSSO(r.Context(), provider, code)
 	switch {
 	case errors.Is(err, ErrUnknownProvider):
-		writeError(w, http.StatusNotFound, "unknown or unconfigured provider")
+		httpx.WriteError(w, http.StatusNotFound, "unknown or unconfigured provider")
 		return
 	case errors.Is(err, ErrEmailTaken):
-		writeError(w, http.StatusConflict, "that email is already registered with a different login method")
+		httpx.WriteError(w, http.StatusConflict, "that email is already registered with a different login method")
 		return
 	case err != nil:
-		writeError(w, http.StatusUnauthorized, "sso login failed")
+		httpx.WriteError(w, http.StatusUnauthorized, "sso login failed")
 		return
 	}
 
@@ -155,7 +156,10 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"userId": middleware.UserID(r.Context())})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{
+		"userId": middleware.UserID(r.Context()),
+		"orgId":  middleware.OrgID(r.Context()),
+	})
 }
 
 func (h *Handler) secureCookies() bool {
@@ -167,16 +171,16 @@ func (h *Handler) secureCookies() bool {
 func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentials, bool) {
 	var in credentials
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpx.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return credentials{}, false
 	}
 	in.Email = strings.TrimSpace(strings.ToLower(in.Email))
 	if in.Email == "" || !strings.Contains(in.Email, "@") {
-		writeError(w, http.StatusBadRequest, "a valid email is required")
+		httpx.WriteError(w, http.StatusBadRequest, "a valid email is required")
 		return credentials{}, false
 	}
 	if len(in.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+		httpx.WriteError(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return credentials{}, false
 	}
 	return in, true
@@ -188,14 +192,4 @@ func randomState() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }

@@ -16,7 +16,7 @@ func TestIssueAccessToken(t *testing.T) {
 		JWTAccessTTL: time.Minute,
 	}
 
-	tok, err := issueAccessToken(cfg, "user-123", "a@b.com")
+	tok, err := issueAccessToken(cfg, User{ID: "user-123", Email: "a@b.com", OrgID: "org-789"})
 	if err != nil {
 		t.Fatalf("issueAccessToken: %v", err)
 	}
@@ -36,12 +36,18 @@ func TestIssueAccessToken(t *testing.T) {
 	if iss != "go-crm-test" {
 		t.Fatalf("issuer = %q, want go-crm-test", iss)
 	}
+	// Every CRM query is scoped by this claim, so its absence would be a
+	// tenant-isolation bug, not a cosmetic one.
+	claims, _ := parsed.Claims.(jwt.MapClaims)
+	if org, _ := claims["org"].(string); org != "org-789" {
+		t.Fatalf("org claim = %q, want org-789", org)
+	}
 }
 
 func TestIssuedTokenRejectsWrongSecret(t *testing.T) {
 	cfg := config.Config{JWTSecret: "right", JWTIssuer: "go-crm", JWTAccessTTL: time.Minute}
 
-	tok, err := issueAccessToken(cfg, "u1", "a@b.com")
+	tok, err := issueAccessToken(cfg, User{ID: "u1", Email: "a@b.com", OrgID: "o1"})
 	if err != nil {
 		t.Fatal(err)
 	}

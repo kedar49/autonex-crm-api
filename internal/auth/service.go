@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
@@ -48,12 +49,28 @@ func (s *Service) Register(ctx context.Context, email, password string) (string,
 	if err != nil {
 		return "", User{}, err
 	}
-	u, err := s.store.createUser(ctx, email, hash)
+	u, err := s.store.createUserWithOrg(ctx, newUser{
+		Email:        email,
+		OrgName:      defaultOrgName(email),
+		PasswordHash: &hash,
+		AuthProvider: "password",
+	})
 	if err != nil {
 		return "", User{}, err
 	}
-	tok, err := issueAccessToken(s.cfg, u.ID, u.Email)
+	tok, err := issueAccessToken(s.cfg, u)
 	return tok, u, err
+}
+
+// defaultOrgName names the personal workspace a new signup gets. Registration
+// asks only for an email, so the local part is the best label available; the
+// owner can rename it once organization settings exist.
+func defaultOrgName(email string) string {
+	local, _, found := strings.Cut(email, "@")
+	if !found || local == "" {
+		return "My workspace"
+	}
+	return local + "'s workspace"
 }
 
 // Login verifies an email/password pair and returns an access token.
@@ -73,7 +90,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (string, Us
 	if err != nil || !ok {
 		return "", User{}, ErrInvalidCredentials
 	}
-	tok, err := issueAccessToken(s.cfg, u.ID, u.Email)
+	tok, err := issueAccessToken(s.cfg, u)
 	return tok, u, err
 }
 
@@ -109,7 +126,7 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (strin
 	// 1. Known SSO identity → log in.
 	u, err := s.store.userByProvider(ctx, provider, id.ProviderUserID)
 	if err == nil {
-		return issueAccessToken(s.cfg, u.ID, u.Email)
+		return issueAccessToken(s.cfg, u)
 	}
 	if !errors.Is(err, ErrUserNotFound) {
 		return "", err
@@ -119,17 +136,22 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (strin
 	//    auto-link (would let SSO take over a password account).
 	if existing, e := s.store.userByEmail(ctx, id.Email); e == nil {
 		if existing.AuthProvider == provider {
-			return issueAccessToken(s.cfg, existing.ID, existing.Email)
+			return issueAccessToken(s.cfg, existing)
 		}
 		return "", ErrEmailTaken
 	} else if !errors.Is(e, ErrUserNotFound) {
 		return "", e
 	}
 
-	// 3. First time → provision a new SSO user.
-	u, err = s.store.createSSOUser(ctx, id.Email, provider, id.ProviderUserID)
+	// 3. First time → provision a new SSO user with their own workspace.
+	u, err = s.store.createUserWithOrg(ctx, newUser{
+		Email:          id.Email,
+		OrgName:        defaultOrgName(id.Email),
+		AuthProvider:   provider,
+		ProviderUserID: &id.ProviderUserID,
+	})
 	if err != nil {
 		return "", err
 	}
-	return issueAccessToken(s.cfg, u.ID, u.Email)
+	return issueAccessToken(s.cfg, u)
 }
