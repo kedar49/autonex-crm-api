@@ -20,10 +20,13 @@ type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	JWTIssuer   string
-	// JWTAccessTTL is how long an issued access token stays valid.
+	// JWTAccessTTL is how long an issued access token stays valid. Short on
+	// purpose — the refresh token below is what keeps a session alive.
 	JWTAccessTTL time.Duration
-	NATSURL      string
-	GatewayAddr  string
+	// JWTRefreshTTL is how long a refresh token (and so a session) lasts.
+	JWTRefreshTTL time.Duration
+	NATSURL       string
+	GatewayAddr   string
 	// WebAppURL is the SPA origin the SSO callback redirects back to.
 	WebAppURL string
 	// OIDCRedirectBase is the public base URL of the SSO routes, e.g.
@@ -49,6 +52,7 @@ func Load() Config {
 		JWTSecret:        getenv("JWT_SECRET", "change-me-in-production"),
 		JWTIssuer:        getenv("JWT_ISSUER", "go-crm"),
 		JWTAccessTTL:     getdur("JWT_ACCESS_TTL", 15*time.Minute),
+		JWTRefreshTTL:    getdur("JWT_REFRESH_TTL", 30*24*time.Hour),
 		NATSURL:          getenv("NATS_URL", "nats://localhost:4222"),
 		GatewayAddr:      getenv("GATEWAY_ADDR", ":8080"),
 		WebAppURL:        getenv("WEB_APP_URL", "http://localhost:4321"),

@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/internal/auth"
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
@@ -128,6 +129,9 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err, "could not accept invitation")
 		return
 	}
+	// Same session shape as login: refresh token in an HttpOnly cookie, access
+	// token in the body.
+	auth.SetRefreshCookie(w, h.cfg, session.RefreshToken, session.RefreshExpiresAt)
 	httpx.WriteJSON(w, http.StatusCreated, session)
 }
 

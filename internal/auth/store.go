@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -89,6 +90,86 @@ func (s *store) createUserWithOrg(ctx context.Context, in newUser) (User, error)
 		return User{}, err
 	}
 	return u, nil
+}
+
+func (s *store) userByID(ctx context.Context, id string) (User, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id)
+	return scanUser(row)
+}
+
+// refreshTokenRow is the stored side of a refresh token; the raw value is never
+// persisted (see refresh.go).
+type refreshTokenRow struct {
+	ID        string
+	UserID    string
+	ExpiresAt time.Time
+	RevokedAt *time.Time
+}
+
+func (s *store) createRefreshToken(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, expiresAt)
+	return err
+}
+
+func (s *store) refreshTokenByHash(ctx context.Context, tokenHash string) (refreshTokenRow, error) {
+	var r refreshTokenRow
+	err := s.pool.QueryRow(ctx,
+		`SELECT id::text, user_id::text, expires_at, revoked_at
+		 FROM refresh_tokens WHERE token_hash = $1`, tokenHash,
+	).Scan(&r.ID, &r.UserID, &r.ExpiresAt, &r.RevokedAt)
+	return r, err
+}
+
+// rotateRefreshToken revokes the presented token and issues its successor in one
+// transaction — a rotation that revoked without replacing would sign the user out.
+func (s *store) rotateRefreshToken(
+	ctx context.Context, oldID, userID, newHash string, expiresAt time.Time,
+) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var newID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+		 VALUES ($1, $2, $3) RETURNING id::text`,
+		userID, newHash, expiresAt).Scan(&newID); err != nil {
+		return err
+	}
+
+	// The `revoked_at IS NULL` guard makes the rotation itself single-use: two
+	// concurrent refreshes with the same token can't both succeed.
+	tag, err := tx.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2
+		 WHERE id = $1 AND revoked_at IS NULL`, oldID, newID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrInvalidRefresh
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (s *store) revokeRefreshToken(ctx context.Context, tokenHash string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked_at = now()
+		 WHERE token_hash = $1 AND revoked_at IS NULL`, tokenHash)
+	return err
+}
+
+// revokeAllRefreshTokens is the reuse-detection response: assume the family is
+// compromised and force a real login.
+func (s *store) revokeAllRefreshTokens(ctx context.Context, userID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked_at = now()
+		 WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return err
 }
 
 func scanUser(row pgx.Row) (User, error) {

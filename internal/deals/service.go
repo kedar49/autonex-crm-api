@@ -47,6 +47,7 @@ type Input struct {
 	Stage             string     `json:"stage"`
 	OwnerUserID       *string    `json:"ownerUserId"`
 	ContactID         *string    `json:"contactId"`
+	AccountID         *string    `json:"accountId"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 }
 
@@ -139,13 +140,15 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 		return Input{}, err
 	}
 
-	// Both foreign keys are client-supplied, so both need an org check.
+	// Every client-supplied foreign key needs an org check — the FK constraint
+	// alone would accept another tenant's row.
 	for _, ref := range []struct {
 		table string
 		id    *string
 	}{
 		{"users", in.OwnerUserID},
 		{"contacts", in.ContactID},
+		{"accounts", in.AccountID},
 	} {
 		if ref.id == nil {
 			continue
@@ -168,6 +171,7 @@ func normalize(in Input) Input {
 	in.Description = trimmedOrNil(in.Description)
 	in.OwnerUserID = trimmedOrNil(in.OwnerUserID)
 	in.ContactID = trimmedOrNil(in.ContactID)
+	in.AccountID = trimmedOrNil(in.AccountID)
 
 	if strings.TrimSpace(in.Stage) == "" {
 		in.Stage = Stages[0]

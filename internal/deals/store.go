@@ -99,13 +99,13 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO deals
 		   (org_id, title, description, amount, stage, owner_user_id, contact_id,
-		    expected_close_date, position)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-		         COALESCE((SELECT max(position) + $9 FROM deals
+		    account_id, expected_close_date, position)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+		         COALESCE((SELECT max(position) + $10 FROM deals
 		                   WHERE org_id = $1 AND stage = $5), 0))
 		 RETURNING id::text`,
 		orgID, in.Title, in.Description, in.Amount, in.Stage, in.OwnerUserID,
-		in.ContactID, in.ExpectedCloseDate, float64(positionGap),
+		in.ContactID, in.AccountID, in.ExpectedCloseDate, float64(positionGap),
 	).Scan(&id)
 	if err != nil {
 		return Deal{}, translate(err)
@@ -117,11 +117,11 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE deals
 		 SET title = $3, description = $4, amount = $5, stage = $6,
-		     owner_user_id = $7, contact_id = $8, expected_close_date = $9,
-		     updated_at = now()
+		     owner_user_id = $7, contact_id = $8, account_id = $9,
+		     expected_close_date = $10, updated_at = now()
 		 WHERE org_id = $1 AND id = $2`,
 		orgID, id, in.Title, in.Description, in.Amount, in.Stage,
-		in.OwnerUserID, in.ContactID, in.ExpectedCloseDate)
+		in.OwnerUserID, in.ContactID, in.AccountID, in.ExpectedCloseDate)
 	if err != nil {
 		return Deal{}, translate(err)
 	}

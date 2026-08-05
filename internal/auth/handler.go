@@ -35,6 +35,10 @@ func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/register", h.register)
 	r.Post("/login", h.login)
+	// Both read the refresh cookie rather than an Authorization header: the
+	// caller's access token is expected to be expired by the time it refreshes.
+	r.Post("/refresh", h.refresh)
+	r.Post("/logout", h.logout)
 	r.Get("/sso/{provider}", h.ssoStart)
 	r.Get("/sso/{provider}/callback", h.ssoCallback)
 
@@ -60,7 +64,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tok, user, err := h.svc.Register(r.Context(), in.Email, in.Password)
+	session, err := h.svc.Register(r.Context(), in.Email, in.Password)
 	if errors.Is(err, ErrEmailTaken) {
 		httpx.WriteError(w, http.StatusConflict, "email already registered")
 		return
@@ -69,7 +73,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create account")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusCreated, authResponse{Token: tok, User: user})
+	h.writeSession(w, http.StatusCreated, session)
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +81,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tok, user, err := h.svc.Login(r.Context(), in.Email, in.Password)
+	session, err := h.svc.Login(r.Context(), in.Email, in.Password)
 	if errors.Is(err, ErrInvalidCredentials) {
 		httpx.WriteError(w, http.StatusUnauthorized, "invalid email or password")
 		return
@@ -86,7 +90,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "login failed")
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, authResponse{Token: tok, User: user})
+	h.writeSession(w, http.StatusOK, session)
 }
 
 func (h *Handler) ssoStart(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +141,7 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.svc.CompleteSSO(r.Context(), provider, code)
+	session, err := h.svc.CompleteSSO(r.Context(), provider, code)
 	switch {
 	case errors.Is(err, ErrUnknownProvider):
 		httpx.WriteError(w, http.StatusNotFound, "unknown or unconfigured provider")
@@ -150,9 +154,58 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hand the token to the SPA via the URL fragment (never sent to servers/logs).
-	redirect := strings.TrimRight(h.cfg.WebAppURL, "/") + "/app#token=" + url.QueryEscape(token)
+	// The refresh cookie is set on this top-level navigation, so the session
+	// survives a reload; the access token still rides the URL fragment, which is
+	// never sent to a server or written to a log.
+	SetRefreshCookie(w, h.cfg, session.RefreshToken, session.RefreshExpiresAt)
+	redirect := strings.TrimRight(h.cfg.WebAppURL, "/") + "/app#token=" +
+		url.QueryEscape(session.AccessToken)
 	http.Redirect(w, r, redirect, http.StatusFound)
+}
+
+// refresh rotates the session. The old refresh token is spent by this call, so a
+// client must use the value returned here from now on.
+func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(RefreshCookieName)
+	if err != nil || cookie.Value == "" {
+		httpx.WriteError(w, http.StatusUnauthorized, "no session")
+		return
+	}
+
+	session, err := h.svc.Refresh(r.Context(), cookie.Value)
+	if errors.Is(err, ErrInvalidRefresh) {
+		// Clear the dead cookie so the browser stops sending it.
+		ClearRefreshCookie(w, h.cfg)
+		httpx.WriteError(w, http.StatusUnauthorized, "session expired")
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, http.StatusInternalServerError, "could not refresh the session")
+		return
+	}
+	h.writeSession(w, http.StatusOK, session)
+}
+
+// logout revokes the refresh token server-side, so the session is dead even if a
+// copy of the cookie survives somewhere.
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(RefreshCookieName); err == nil {
+		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+			httpx.WriteError(w, http.StatusInternalServerError, "could not sign out")
+			return
+		}
+	}
+	ClearRefreshCookie(w, h.cfg)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeSession sets the refresh cookie and returns the access token in the body.
+// The split is deliberate: the refresh token is the long-lived credential and
+// stays out of reach of script, while the access token is short-lived and held in
+// memory by the SPA.
+func (h *Handler) writeSession(w http.ResponseWriter, status int, session Session) {
+	SetRefreshCookie(w, h.cfg, session.RefreshToken, session.RefreshExpiresAt)
+	httpx.WriteJSON(w, status, authResponse{Token: session.AccessToken, User: session.User})
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {

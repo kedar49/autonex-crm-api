@@ -42,19 +42,27 @@ type NewInvitation struct {
 
 // Session is returned when an invitation is accepted: the teammate is signed in
 // straight away rather than bounced to the login form.
+//
+// Carries the refresh token so the handler can set the cookie — it is never
+// serialized (see the `json:"-"` tags), because the whole point of the cookie is
+// that script never sees the value.
 type Session struct {
-	Token string    `json:"token"`
-	User  auth.User `json:"user"`
+	Token            string    `json:"token"`
+	User             auth.User `json:"user"`
+	RefreshToken     string    `json:"-"`
+	RefreshExpiresAt time.Time `json:"-"`
 }
 
 // Service holds the organization/teammate business logic.
 type Service struct {
 	store *store
-	cfg   config.Config
+	// pool is passed through to auth.IssueSession, which writes the refresh token.
+	pool *pgxpool.Pool
+	cfg  config.Config
 }
 
 func newService(pool *pgxpool.Pool, cfg config.Config) *Service {
-	return &Service{store: &store{pool: pool}, cfg: cfg}
+	return &Service{store: &store{pool: pool}, pool: pool, cfg: cfg}
 }
 
 // Members lists the users of an organization.
@@ -165,16 +173,22 @@ func (s *Service) Accept(ctx context.Context, token, name, password string) (Ses
 		return Session{}, err
 	}
 
-	access, err := auth.IssueAccessToken(s.cfg, u.ID, u.Email, u.OrgID)
+	user := auth.User{
+		ID: u.ID, Email: u.Email, OrgID: u.OrgID,
+		Name: nilIfEmpty(strings.TrimSpace(name)), AuthProvider: "password",
+	}
+
+	// Auth owns session minting, including the refresh token — this module just
+	// asks for one rather than keeping a second implementation.
+	session, err := auth.IssueSession(ctx, s.pool, s.cfg, user)
 	if err != nil {
 		return Session{}, err
 	}
 	return Session{
-		Token: access,
-		User: auth.User{
-			ID: u.ID, Email: u.Email, OrgID: u.OrgID,
-			Name: nilIfEmpty(strings.TrimSpace(name)), AuthProvider: "password",
-		},
+		Token:            session.AccessToken,
+		User:             user,
+		RefreshToken:     session.RefreshToken,
+		RefreshExpiresAt: session.RefreshExpiresAt,
 	}, nil
 }
 
