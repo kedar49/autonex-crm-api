@@ -2,44 +2,80 @@ package contacts
 
 import "testing"
 
+func ptr[T any](v T) *T { return &v }
+
 func TestNormalizeTrimsAndLowercases(t *testing.T) {
-	phone := "  555-0100  "
-	blank := "   "
 	in := normalize(Input{
 		FirstName: "  Ada ",
-		LastName:  " Lovelace  ",
-		Email:     "  Ada@Example.COM ",
-		Phone:     &phone,
-		AccountID: &blank,
+		LastName:  ptr(" Lovelace  "),
+		Email:     ptr("  Ada@Example.COM "),
+		Phone:     ptr("  555-0100  "),
+		AccountID: ptr("   "),
 	})
 
-	if in.FirstName != "Ada" || in.LastName != "Lovelace" {
-		t.Fatalf("names not trimmed: %q %q", in.FirstName, in.LastName)
+	if in.FirstName != "Ada" {
+		t.Errorf("FirstName = %q, want Ada", in.FirstName)
 	}
-	if in.Email != "ada@example.com" {
-		t.Fatalf("email = %q, want ada@example.com", in.Email)
+	if in.LastName == nil || *in.LastName != "Lovelace" {
+		t.Errorf("LastName = %v, want Lovelace", in.LastName)
+	}
+	if in.Email == nil || *in.Email != "ada@example.com" {
+		t.Errorf("Email = %v, want ada@example.com", in.Email)
 	}
 	if in.Phone == nil || *in.Phone != "555-0100" {
-		t.Fatalf("phone not trimmed: %v", in.Phone)
+		t.Errorf("phone not trimmed: %v", in.Phone)
 	}
 	// A blank optional field must become NULL, not an empty-string FK.
 	if in.AccountID != nil {
-		t.Fatalf("blank accountId = %q, want nil", *in.AccountID)
+		t.Errorf("blank accountId = %q, want nil", *in.AccountID)
 	}
 }
 
-func TestValidate(t *testing.T) {
-	ok := Input{FirstName: "Ada", LastName: "Lovelace", Email: "ada@example.com"}
-	if err := validate(ok); err != nil {
-		t.Fatalf("valid input rejected: %v", err)
+func TestNormalizeBlankOptionalNamesAndEmailsBecomeNil(t *testing.T) {
+	in := normalize(Input{FirstName: "Ada", LastName: ptr("  "), Email: ptr("   ")})
+
+	if in.LastName != nil {
+		t.Errorf("blank LastName = %q, want nil", *in.LastName)
+	}
+	// Must be NULL rather than "": the partial unique index on lower(email)
+	// would otherwise collide across every email-less contact.
+	if in.Email != nil {
+		t.Errorf("blank Email = %q, want nil", *in.Email)
+	}
+}
+
+func TestValidateRequiresOnlyAFirstName(t *testing.T) {
+	// Relaxed in migration 000006 so a lead — which only requires a first name —
+	// can be converted into a contact. Mononyms and phone-only contacts are also
+	// simply real.
+	cases := map[string]Input{
+		"name only":      {FirstName: "Ada"},
+		"name + surname": {FirstName: "Ada", LastName: ptr("Lovelace")},
+		"name + email":   {FirstName: "Ada", Email: ptr("ada@example.com")},
+		"name + phone":   {FirstName: "Ada", Phone: ptr("555-0100")},
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := validate(in); err != nil {
+				t.Fatalf("valid input rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejects(t *testing.T) {
+	long := make([]byte, 101)
+	for i := range long {
+		long[i] = 'a'
 	}
 
 	tests := map[string]Input{
-		"missing first name": {LastName: "L", Email: "a@b.com"},
-		"missing last name":  {FirstName: "A", Email: "a@b.com"},
-		"missing email":      {FirstName: "A", LastName: "L"},
-		"email without @":    {FirstName: "A", LastName: "L", Email: "not-an-email"},
-		"email with space":   {FirstName: "A", LastName: "L", Email: "a b@c.com"},
+		"missing first name": {LastName: ptr("L")},
+		"blank first name":   {FirstName: ""},
+		// Optional, but must look like an address when supplied.
+		"email without @":  {FirstName: "A", Email: ptr("not-an-email")},
+		"email with space": {FirstName: "A", Email: ptr("a b@c.com")},
+		"over-long name":   {FirstName: string(long)},
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {

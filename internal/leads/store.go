@@ -47,6 +47,11 @@ type Lead struct {
 	Position    float64   `json:"position"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+	// Set once the lead has produced a deal. ConvertedAt doubles as the guard
+	// against converting twice (see convert.go).
+	ConvertedAt        *time.Time `json:"convertedAt"`
+	ConvertedDealID    *string    `json:"convertedDealId"`
+	ConvertedContactID *string    `json:"convertedContactId"`
 }
 
 type store struct {
@@ -58,7 +63,8 @@ type store struct {
 const leadColumns = `
 	l.id::text, l.first_name, l.last_name, l.email, l.phone, l.company, l.source,
 	l.notes, l.value, l.stage, l.owner_user_id::text, u.name, u.email,
-	l.position, l.created_at, l.updated_at`
+	l.position, l.created_at, l.updated_at,
+	l.converted_at, l.converted_deal_id::text, l.converted_contact_id::text`
 
 const leadFrom = ` FROM leads l LEFT JOIN users u ON u.id = l.owner_user_id `
 
@@ -270,7 +276,8 @@ func scanLead(row rowScanner) (Lead, error) {
 	err := row.Scan(
 		&l.ID, &l.FirstName, &l.LastName, &l.Email, &l.Phone, &l.Company, &l.Source,
 		&l.Notes, &l.Value, &l.Stage, &l.OwnerUserID, &l.OwnerName, &l.OwnerEmail,
-		&l.Position, &l.CreatedAt, &l.UpdatedAt)
+		&l.Position, &l.CreatedAt, &l.UpdatedAt,
+		&l.ConvertedAt, &l.ConvertedDealID, &l.ConvertedContactID)
 	if err != nil {
 		return Lead{}, translate(err)
 	}

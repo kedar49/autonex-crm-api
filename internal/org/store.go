@@ -43,8 +43,44 @@ type Invitation struct {
 	AcceptedAt *time.Time `json:"acceptedAt"`
 }
 
+// Workspace is the organization itself — the settings every surface needs.
+type Workspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Currency is the ISO 4217 code every amount in this workspace is in. One
+	// per organization, not per record — see migration 000006.
+	Currency string `json:"currency"`
+}
+
 type store struct {
 	pool *pgxpool.Pool
+}
+
+func (s *store) workspace(ctx context.Context, orgID string) (Workspace, error) {
+	var w Workspace
+	err := s.pool.QueryRow(ctx,
+		`SELECT id::text, name, currency FROM organizations WHERE id = $1`, orgID,
+	).Scan(&w.ID, &w.Name, &w.Currency)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Workspace{}, ErrNotFound
+	}
+	return w, err
+}
+
+// updateWorkspace applies a partial update: a nil field is left alone.
+func (s *store) updateWorkspace(ctx context.Context, orgID string, name, currency *string) (Workspace, error) {
+	var w Workspace
+	err := s.pool.QueryRow(ctx,
+		`UPDATE organizations
+		 SET name = COALESCE($2, name), currency = COALESCE($3, currency)
+		 WHERE id = $1
+		 RETURNING id::text, name, currency`,
+		orgID, name, currency,
+	).Scan(&w.ID, &w.Name, &w.Currency)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Workspace{}, ErrNotFound
+	}
+	return w, err
 }
 
 func (s *store) members(ctx context.Context, orgID string) ([]Member, error) {

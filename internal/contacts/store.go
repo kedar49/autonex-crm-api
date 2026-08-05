@@ -33,8 +33,8 @@ const (
 type Contact struct {
 	ID        string    `json:"id"`
 	FirstName string    `json:"firstName"`
-	LastName  string    `json:"lastName"`
-	Email     string    `json:"email"`
+	LastName  *string   `json:"lastName"`
+	Email     *string   `json:"email"`
 	Phone     *string   `json:"phone"`
 	AccountID *string   `json:"accountId"`
 	CreatedAt time.Time `json:"createdAt"`

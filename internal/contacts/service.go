@@ -26,10 +26,15 @@ func invalid(format string, args ...any) error {
 }
 
 // Input is the writable shape of a contact (create and update share it).
+//
+// Only the first name is required. Surname and email became optional in
+// migration 000006: a lead only requires a first name, so demanding both here
+// made a perfectly good lead impossible to convert — and mononyms and
+// phone-only contacts are real anyway.
 type Input struct {
 	FirstName string  `json:"firstName"`
-	LastName  string  `json:"lastName"`
-	Email     string  `json:"email"`
+	LastName  *string `json:"lastName"`
+	Email     *string `json:"email"`
 	Phone     *string `json:"phone"`
 	AccountID *string `json:"accountId"`
 }
@@ -118,10 +123,16 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 // fields into NULL rather than empty strings.
 func normalize(in Input) Input {
 	in.FirstName = strings.TrimSpace(in.FirstName)
-	in.LastName = strings.TrimSpace(in.LastName)
-	in.Email = strings.ToLower(strings.TrimSpace(in.Email))
+	in.LastName = trimmedOrNil(in.LastName)
 	in.Phone = trimmedOrNil(in.Phone)
 	in.AccountID = trimmedOrNil(in.AccountID)
+
+	if e := trimmedOrNil(in.Email); e != nil {
+		lower := strings.ToLower(*e)
+		in.Email = &lower
+	} else {
+		in.Email = nil
+	}
 	return in
 }
 
@@ -139,19 +150,23 @@ func trimmedOrNil(v *string) *string {
 // validate mirrors the client-side rules in shared/schemas (contactSchema); the
 // server repeats them because a client is not a trust boundary.
 func validate(in Input) error {
-	switch {
-	case in.FirstName == "":
+	if in.FirstName == "" {
 		return invalid("first name is required")
-	case in.LastName == "":
-		return invalid("last name is required")
-	case len(in.FirstName) > 100 || len(in.LastName) > 100:
+	}
+	if len(in.FirstName) > 100 {
 		return invalid("names must be 100 characters or fewer")
-	case in.Email == "":
-		return invalid("email is required")
-	case !strings.Contains(in.Email, "@") || strings.ContainsAny(in.Email, " \t"):
-		return invalid("a valid email is required")
-	case len(in.Email) > 255:
-		return invalid("email must be 255 characters or fewer")
+	}
+	if in.LastName != nil && len(*in.LastName) > 100 {
+		return invalid("names must be 100 characters or fewer")
+	}
+	// Optional, but must look like an address when supplied.
+	if in.Email != nil {
+		switch {
+		case !strings.Contains(*in.Email, "@") || strings.ContainsAny(*in.Email, " \t"):
+			return invalid("a valid email is required")
+		case len(*in.Email) > 255:
+			return invalid("email must be 255 characters or fewer")
+		}
 	}
 	if in.Phone != nil && len(*in.Phone) > 40 {
 		return invalid("phone must be 40 characters or fewer")

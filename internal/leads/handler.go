@@ -35,7 +35,23 @@ func (h *Handler) Routes() chi.Router {
 	// Separate from PUT: a drag-and-drop is a reorder, not a field edit, and the
 	// board sends it on every drop.
 	r.Patch("/{id}/move", h.move)
+	// POST, not PATCH: converting creates two new records, it doesn't edit this one.
+	r.Post("/{id}/convert", h.convert)
 	return r
+}
+
+func (h *Handler) convert(w http.ResponseWriter, r *http.Request) {
+	var in ConvertInput
+	// An empty body is valid — every override is optional.
+	if r.ContentLength > 0 && !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	result, err := h.svc.Convert(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"), in)
+	if err != nil {
+		writeErr(w, err, "could not convert lead")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, result)
 }
 
 func (h *Handler) board(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +125,8 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 		httpx.WriteError(w, http.StatusNotFound, "lead not found")
 	case errors.Is(err, ErrOwnerNotFound):
 		httpx.WriteError(w, http.StatusBadRequest, "that owner is not a member of your organization")
+	case errors.Is(err, ErrAlreadyConverted):
+		httpx.WriteError(w, http.StatusConflict, "this lead has already been converted")
 	case IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:

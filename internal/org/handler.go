@@ -33,12 +33,41 @@ func (h *Handler) Routes() chi.Router {
 
 	r.Group(func(pr chi.Router) {
 		pr.Use(middleware.RequireJWT(h.cfg.JWTSecret))
+		pr.Get("/", h.workspace)
+		pr.Patch("/", h.updateWorkspace)
 		pr.Get("/members", h.members)
 		pr.Get("/invitations", h.invitations)
 		pr.Post("/invitations", h.invite)
 		pr.Delete("/invitations/{id}", h.revoke)
 	})
 	return r
+}
+
+func (h *Handler) workspace(w http.ResponseWriter, r *http.Request) {
+	ws, err := h.svc.Workspace(r.Context(), middleware.OrgID(r.Context()))
+	if err != nil {
+		writeErr(w, err, "could not load the workspace")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, ws)
+}
+
+func (h *Handler) updateWorkspace(w http.ResponseWriter, r *http.Request) {
+	// Pointers so an omitted field means "leave alone" rather than "clear".
+	var in struct {
+		Name     *string `json:"name"`
+		Currency *string `json:"currency"`
+	}
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+
+	ws, err := h.svc.UpdateWorkspace(r.Context(), middleware.OrgID(r.Context()), in.Name, in.Currency)
+	if err != nil {
+		writeErr(w, err, "could not update the workspace")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, ws)
 }
 
 func (h *Handler) members(w http.ResponseWriter, r *http.Request) {

@@ -62,6 +62,50 @@ func (s *Service) Members(ctx context.Context, orgID string) ([]Member, error) {
 	return s.store.members(ctx, orgID)
 }
 
+// Workspace returns the organization's own settings.
+func (s *Service) Workspace(ctx context.Context, orgID string) (Workspace, error) {
+	return s.store.workspace(ctx, orgID)
+}
+
+// UpdateWorkspace applies a partial update to the organization's settings.
+func (s *Service) UpdateWorkspace(ctx context.Context, orgID string, name, currency *string) (Workspace, error) {
+	if name != nil {
+		trimmed := strings.TrimSpace(*name)
+		if trimmed == "" {
+			return Workspace{}, ValidationError{msg: "workspace name cannot be empty"}
+		}
+		if len(trimmed) > 120 {
+			return Workspace{}, ValidationError{msg: "workspace name must be 120 characters or fewer"}
+		}
+		name = &trimmed
+	}
+	if currency != nil {
+		// The DB has a CHECK for this too; validating here turns a 500 into a
+		// useful 400.
+		code := strings.ToUpper(strings.TrimSpace(*currency))
+		if !isCurrencyCode(code) {
+			return Workspace{}, ValidationError{msg: "currency must be a 3-letter code, e.g. USD"}
+		}
+		currency = &code
+	}
+	return s.store.updateWorkspace(ctx, orgID, name, currency)
+}
+
+// isCurrencyCode checks the shape only — ISO 4217 has ~180 codes and hard-coding
+// them would just be a list to maintain. Formatting falls back gracefully on an
+// unknown-but-well-formed code.
+func isCurrencyCode(code string) bool {
+	if len(code) != 3 {
+		return false
+	}
+	for _, r := range code {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 // PendingInvitations lists invitations that have not been accepted yet.
 func (s *Service) PendingInvitations(ctx context.Context, orgID string) ([]Invitation, error) {
 	return s.store.pendingInvitations(ctx, orgID)
