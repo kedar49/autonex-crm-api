@@ -40,7 +40,7 @@ func (h *Handler) Routes() chi.Router {
 func (h *Handler) board(w http.ResponseWriter, r *http.Request) {
 	board, err := h.svc.Board(r.Context(), middleware.OrgID(r.Context()))
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not load the board")
+		httpx.WriteServerError(w, "could not load the board", err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, board)
@@ -112,6 +112,6 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 	case IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
-		httpx.WriteError(w, http.StatusInternalServerError, fallback)
+		httpx.WriteServerError(w, fallback, err)
 	}
 }

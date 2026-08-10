@@ -43,7 +43,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 
 	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), limit, offset)
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not list accounts")
+		httpx.WriteServerError(w, "could not list accounts", err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, page)
@@ -105,6 +105,6 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 	case IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
-		httpx.WriteError(w, http.StatusInternalServerError, fallback)
+		httpx.WriteServerError(w, fallback, err)
 	}
 }
