@@ -4,6 +4,7 @@ package httpx
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -21,6 +22,17 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // WriteError writes the {"error": msg} envelope the clients expect.
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, map[string]string{"error": msg})
+}
+
+// WriteServerError returns the opaque 500 message to the client *and logs the
+// cause*.
+//
+// Clients must never see an internal error — it leaks schema and query shapes —
+// but a 500 that leaves no trace anywhere is undebuggable. Every module's
+// fallback branch goes through here.
+func WriteServerError(w http.ResponseWriter, msg string, err error) {
+	log.Printf("500 %s: %v", msg, err)
+	WriteError(w, http.StatusInternalServerError, msg)
 }
 
 // DecodeJSON reads a size-limited JSON body into dst. On failure it has already
