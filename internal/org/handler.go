@@ -74,7 +74,7 @@ func (h *Handler) updateWorkspace(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 	members, err := h.svc.Members(r.Context(), middleware.OrgID(r.Context()))
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not list members")
+		httpx.WriteServerError(w, "could not list members", err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, members)
@@ -83,7 +83,7 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) invitations(w http.ResponseWriter, r *http.Request) {
 	invites, err := h.svc.PendingInvitations(r.Context(), middleware.OrgID(r.Context()))
 	if err != nil {
-		httpx.WriteError(w, http.StatusInternalServerError, "could not list invitations")
+		httpx.WriteServerError(w, "could not list invitations", err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, invites)
@@ -150,6 +150,6 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 	case IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
-		httpx.WriteError(w, http.StatusInternalServerError, fallback)
+		httpx.WriteServerError(w, fallback, err)
 	}
 }
