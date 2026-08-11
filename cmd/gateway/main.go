@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/go-crm/services/internal/accounts"
+	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/internal/auth"
 	"github.com/go-crm/services/internal/contacts"
 	"github.com/go-crm/services/internal/dashboard"
@@ -61,6 +62,7 @@ func main() {
 	r.Mount("/api/v1/contacts", contacts.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/quotes", quotes.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/invoices", invoices.NewHandler(pool, cfg.JWTSecret).Routes())
+	r.Mount("/api/v1/activities", activities.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/dashboard", dashboard.NewHandler(pool, cfg.JWTSecret).Routes())
 
 	srv := &http.Server{
