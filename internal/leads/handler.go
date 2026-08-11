@@ -73,11 +73,21 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	lead, err := h.svc.Create(r.Context(), middleware.OrgID(r.Context()), in)
+	ctx := r.Context()
+	lead, err := h.svc.Create(ctx, middleware.OrgID(ctx), in)
 	if err != nil {
 		writeErr(w, err, "could not create lead")
 		return
 	}
+
+	// Deals log their creation; leads did not, which left a gap at the very start
+	// of every lead's timeline — the one entry that explains where it came from.
+	activities.Log(ctx, h.pool, activities.Entry{
+		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+		LeadID: lead.ID, ContactID: derefID(lead.ContactID), AccountID: derefID(lead.AccountID),
+		Subject: "Lead created", Body: leadLabel(lead),
+	})
+
 	httpx.WriteJSON(w, http.StatusCreated, lead)
 }
 
@@ -157,6 +167,23 @@ func (h *Handler) convert(w http.ResponseWriter, r *http.Request) {
 }
 
 // logNote records a person's note alongside the stage change that prompted it.
+// leadLabel is the one-line description a timeline entry carries: the person,
+// and the company when there is one.
+func leadLabel(lead Lead) string {
+	name := lead.FirstName
+	if lead.LastName != nil && *lead.LastName != "" {
+		name += " " + *lead.LastName
+	}
+	switch {
+	case lead.AccountName != nil && *lead.AccountName != "":
+		return name + " · " + *lead.AccountName
+	case lead.Company != nil && *lead.Company != "":
+		return name + " · " + *lead.Company
+	default:
+		return name
+	}
+}
+
 func (h *Handler) logNote(ctx context.Context, lead Lead, note string) {
 	activities.Log(ctx, h.pool, activities.Entry{
 		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),

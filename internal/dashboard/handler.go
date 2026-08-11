@@ -46,6 +46,11 @@ type Summary struct {
 	Quotes Pipeline `json:"quotes"`
 	// Billing is not a pipeline: what matters is money owed, not stage counts.
 	Invoices invoices.Stats `json:"invoices"`
+
+	// The two lists the command centre leads with: what needs doing, and what
+	// just happened.
+	Attention []Attention `json:"attention"`
+	Recent    []Recent    `json:"recent"`
 }
 
 // Handler exposes GET /api/v1/dashboard.
@@ -132,6 +137,13 @@ func (h *Handler) build(ctx context.Context, orgID string) (Summary, error) {
 	}
 	if err := h.pool.QueryRow(ctx,
 		`SELECT count(*) FROM users WHERE org_id = $1`, orgID).Scan(&sum.Members); err != nil {
+		return Summary{}, err
+	}
+
+	if sum.Attention, err = h.attention(ctx, orgID); err != nil {
+		return Summary{}, err
+	}
+	if sum.Recent, err = h.recent(ctx, orgID); err != nil {
 		return Summary{}, err
 	}
 	return sum, nil

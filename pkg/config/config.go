@@ -27,6 +27,9 @@ type Config struct {
 	JWTRefreshTTL time.Duration
 	NATSURL       string
 	GatewayAddr   string
+	// Timezone is the session time zone for every database connection; it decides
+	// what CURRENT_DATE means, and so what "overdue" and "due today" mean.
+	Timezone string
 	// WebAppURL is the SPA origin the SSO callback redirects back to.
 	WebAppURL string
 	// OIDCRedirectBase is the public base URL of the SSO routes, e.g.
@@ -57,6 +60,7 @@ func Load() Config {
 		GatewayAddr:      getenv("GATEWAY_ADDR", ":8080"),
 		WebAppURL:        getenv("WEB_APP_URL", "http://localhost:4321"),
 		OIDCRedirectBase: getenv("OIDC_REDIRECT_BASE", "http://localhost:8080/api/v1/auth/sso"),
+		Timezone:         getenv("APP_TIMEZONE", "UTC"),
 		OAuthCreds:       loadOAuthCreds(),
 	}
 }
