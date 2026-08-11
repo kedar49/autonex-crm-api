@@ -14,75 +14,124 @@ var (
 	// ErrNotFound means no lead with that id exists in the caller's org. A lead
 	// belonging to another tenant is indistinguishable from a missing one.
 	ErrNotFound = errors.New("lead not found")
-	// ErrOwnerNotFound means the assignee is not a member of the caller's org.
-	ErrOwnerNotFound = errors.New("owner is not a member of this organization")
+	// ErrRefNotFound means a referenced owner, contact or company isn't in the org.
+	ErrRefNotFound = errors.New("referenced record is not in this organization")
 )
 
 const (
-	pgInvalidTextRepr     = "22P02" // e.g. "abc" where a UUID is expected
-	pgCheckViolation      = "23514" // the stage CHECK constraint
-	pgForeignKeyViolation = "23503" // owner_user_id pointing at nothing
+	pgInvalidTextRepr     = "22P02"
+	pgCheckViolation      = "23514"
+	pgForeignKeyViolation = "23503"
 )
 
-// positionGap is the spacing between cards in a column. Positions are rewritten
-// as multiples of this on every move, so gaps never need splitting.
-const positionGap = 1000
-
-// Lead is the leads module's view of a row, including the denormalized owner
-// fields the board renders on each card.
+// Lead is the module's view of a row, plus the joined labels a list row needs.
 type Lead struct {
-	ID          string    `json:"id"`
-	FirstName   string    `json:"firstName"`
-	LastName    *string   `json:"lastName"`
-	Email       *string   `json:"email"`
-	Phone       *string   `json:"phone"`
-	Company     *string   `json:"company"`
-	Source      *string   `json:"source"`
-	Notes       *string   `json:"notes"`
-	Value       *float64  `json:"value"`
-	Stage       string    `json:"stage"`
-	OwnerUserID *string   `json:"ownerUserId"`
-	OwnerName   *string   `json:"ownerName"`
-	OwnerEmail  *string   `json:"ownerEmail"`
-	Position    float64   `json:"position"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	// Set once the lead has produced a deal. ConvertedAt doubles as the guard
-	// against converting twice (see convert.go).
+	ID        string   `json:"id"`
+	FirstName string   `json:"firstName"`
+	LastName  *string  `json:"lastName"`
+	Title     *string  `json:"title"`
+	Email     *string  `json:"email"`
+	Phone     *string  `json:"phone"`
+	LinkedIn  *string  `json:"linkedinUrl"`
+	Source    *string  `json:"source"`
+	Notes     *string  `json:"notes"`
+	Value     *float64 `json:"value"`
+	Stage     string   `json:"stage"`
+
+	// Company: account_id is the real link, `company` a free-text fallback for a
+	// lead captured before anyone made the account record.
+	AccountID       *string `json:"accountId"`
+	AccountName     *string `json:"accountName"`
+	AccountIndustry *string `json:"accountIndustry"`
+	Company         *string `json:"company"`
+
+	ContactID *string `json:"contactId"`
+
+	OwnerUserID *string `json:"ownerUserId"`
+	OwnerName   *string `json:"ownerName"`
+	OwnerEmail  *string `json:"ownerEmail"`
+
+	FollowUpAt *time.Time `json:"followUpAt"`
+	// Derived, not stored: whether the follow-up is past due and the lead is
+	// still in play.
+	Overdue  bool `json:"overdue"`
+	DueToday bool `json:"dueToday"`
+	// LastContactedAt is the most recent thing a *person* logged — the brief's
+	// "date of contact" column. System events don't count as contact.
+	LastContactedAt *time.Time `json:"lastContactedAt"`
+
 	ConvertedAt        *time.Time `json:"convertedAt"`
 	ConvertedDealID    *string    `json:"convertedDealId"`
 	ConvertedContactID *string    `json:"convertedContactId"`
+
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type store struct {
 	pool *pgxpool.Pool
 }
 
-// Owner columns come from a LEFT JOIN so a card can render "Alex" without the
-// client resolving user ids, and an unassigned lead still returns a row.
 const leadColumns = `
-	l.id::text, l.first_name, l.last_name, l.email, l.phone, l.company, l.source,
-	l.notes, l.value, l.stage, l.owner_user_id::text, u.name, u.email,
-	l.position, l.created_at, l.updated_at,
-	l.converted_at, l.converted_deal_id::text, l.converted_contact_id::text`
+	l.id::text, l.first_name, l.last_name, l.title, l.email, l.phone,
+	l.linkedin_url, l.source, l.notes, l.value, l.stage,
+	l.account_id::text, a.name, a.industry, l.company,
+	l.contact_id::text,
+	l.owner_user_id::text, u.name, u.email,
+	l.follow_up_at,
+	-- COALESCE is load-bearing, not defensive: a lead with no follow-up date
+	-- compares NULL, not false, and pgx cannot scan that into a bool.
+	COALESCE(l.follow_up_at < CURRENT_DATE
+	   AND l.stage NOT IN ('converted','dropped'), false),
+	COALESCE(l.follow_up_at = CURRENT_DATE
+	   AND l.stage NOT IN ('converted','dropped'), false),
+	(SELECT max(act.occurred_at) FROM activities act
+	  WHERE act.lead_id = l.id AND act.kind <> 'system'),
+	l.converted_at, l.converted_deal_id::text, l.converted_contact_id::text,
+	l.created_at, l.updated_at`
 
-const leadFrom = ` FROM leads l LEFT JOIN users u ON u.id = l.owner_user_id `
+const leadFrom = `
+	FROM leads l
+	LEFT JOIN accounts a ON a.id = l.account_id
+	LEFT JOIN users    u ON u.id = l.owner_user_id `
 
-// board returns every lead in the org, ordered so the client can slice it into
-// columns directly. The cap is a safety valve, not paging: a kanban shows the
-// whole pipeline.
-func (s *store) board(ctx context.Context, orgID string, limit int) ([]Lead, error) {
+// urgencyOrder is the brief's "default sort by urgency": anything with a due
+// date first (oldest, so overdue leads lead), then unscheduled work, then the
+// leads that are already finished.
+const urgencyOrder = `
+	ORDER BY
+	  CASE
+	    WHEN l.stage IN ('converted','dropped') THEN 2
+	    WHEN l.follow_up_at IS NULL             THEN 1
+	    ELSE 0
+	  END,
+	  l.follow_up_at ASC NULLS LAST,
+	  l.created_at DESC, l.id`
+
+// filterClause narrows the list. `overdue` and `due_today` are views over the
+// follow-up date rather than stages, so they can't be compared to the stage
+// column; everything else is a plain stage match.
+const filterClause = `
+	WHERE l.org_id = $1
+	  AND ($2 = '' OR
+	       ($2 = 'overdue'   AND l.follow_up_at IS NOT NULL
+	                         AND l.follow_up_at < CURRENT_DATE
+	                         AND l.stage NOT IN ('converted','dropped')) OR
+	       ($2 = 'due_today' AND l.follow_up_at = CURRENT_DATE
+	                         AND l.stage NOT IN ('converted','dropped')) OR
+	       ($2 = 'open'      AND l.stage NOT IN ('converted','dropped')) OR
+	       ($2 NOT IN ('overdue','due_today','open') AND l.stage = $2))`
+
+func (s *store) list(ctx context.Context, orgID, filter string, limit, offset int) ([]Lead, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+leadColumns+leadFrom+
-			`WHERE l.org_id = $1
-			 ORDER BY l.stage, l.position, l.id
-			 LIMIT $2`, orgID, limit)
+		`SELECT `+leadColumns+leadFrom+filterClause+urgencyOrder+`
+		 LIMIT $3 OFFSET $4`, orgID, filter, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, translate(err)
 	}
 	defer rows.Close()
 
-	out := make([]Lead, 0, 64)
+	out := make([]Lead, 0, limit)
 	for rows.Next() {
 		l, err := scanLead(rows)
 		if err != nil {
@@ -93,47 +142,111 @@ func (s *store) board(ctx context.Context, orgID string, limit int) ([]Lead, err
 	return out, rows.Err()
 }
 
+func (s *store) count(ctx context.Context, orgID, filter string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM leads l `+filterClause, orgID, filter).Scan(&n)
+	return n, err
+}
+
+// counts powers the funnel strip and the filter pills in one round-trip.
+func (s *store) counts(ctx context.Context, orgID string) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT stage, count(*) FROM leads WHERE org_id = $1 GROUP BY stage
+		 UNION ALL
+		 SELECT 'overdue', count(*) FROM leads
+		   WHERE org_id = $1 AND follow_up_at IS NOT NULL AND follow_up_at < CURRENT_DATE
+		     AND stage NOT IN ('converted','dropped')
+		 UNION ALL
+		 SELECT 'due_today', count(*) FROM leads
+		   WHERE org_id = $1 AND follow_up_at = CURRENT_DATE
+		     AND stage NOT IN ('converted','dropped')`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int, len(Stages)+2)
+	for rows.Next() {
+		var key string
+		var n int
+		if err := rows.Scan(&key, &n); err != nil {
+			return nil, err
+		}
+		out[key] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *store) get(ctx context.Context, orgID, id string) (Lead, error) {
 	return scanLead(s.pool.QueryRow(ctx,
 		`SELECT `+leadColumns+leadFrom+`WHERE l.org_id = $1 AND l.id = $2`, orgID, id))
 }
 
-// create appends the lead to the end of its column.
-func (s *store) create(ctx context.Context, orgID string, in Input) (Lead, error) {
+func (s *store) create(ctx context.Context, orgID string, in Input) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO leads
-		   (org_id, first_name, last_name, email, phone, company, source, notes,
-		    value, stage, owner_user_id, position)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-		         COALESCE((SELECT max(position) + $12 FROM leads
-		                   WHERE org_id = $1 AND stage = $10), 0))
+		   (org_id, first_name, last_name, title, email, phone, linkedin_url,
+		    company, account_id, contact_id, source, notes, value, stage,
+		    owner_user_id, follow_up_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		 RETURNING id::text`,
-		orgID, in.FirstName, in.LastName, in.Email, in.Phone, in.Company, in.Source,
-		in.Notes, in.Value, in.Stage, in.OwnerUserID, float64(positionGap),
+		orgID, in.FirstName, in.LastName, in.Title, in.Email, in.Phone, in.LinkedIn,
+		in.Company, in.AccountID, in.ContactID, in.Source, in.Notes, in.Value, in.Stage,
+		in.OwnerUserID, in.FollowUpAt,
 	).Scan(&id)
-	if err != nil {
-		return Lead{}, translate(err)
-	}
-	return s.get(ctx, orgID, id)
+	return id, translate(err)
 }
 
-func (s *store) update(ctx context.Context, orgID, id string, in Input) (Lead, error) {
+func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
-		 SET first_name = $3, last_name = $4, email = $5, phone = $6, company = $7,
-		     source = $8, notes = $9, value = $10, stage = $11, owner_user_id = $12,
-		     updated_at = now()
+		 SET first_name = $3, last_name = $4, title = $5, email = $6, phone = $7,
+		     linkedin_url = $8, company = $9, account_id = $10, contact_id = $11,
+		     source = $12, notes = $13, value = $14, stage = $15,
+		     owner_user_id = $16, follow_up_at = $17, updated_at = now()
 		 WHERE org_id = $1 AND id = $2`,
-		orgID, id, in.FirstName, in.LastName, in.Email, in.Phone, in.Company,
-		in.Source, in.Notes, in.Value, in.Stage, in.OwnerUserID)
+		orgID, id, in.FirstName, in.LastName, in.Title, in.Email, in.Phone,
+		in.LinkedIn, in.Company, in.AccountID, in.ContactID, in.Source, in.Notes,
+		in.Value, in.Stage, in.OwnerUserID, in.FollowUpAt)
 	if err != nil {
-		return Lead{}, translate(err)
+		return translate(err)
 	}
 	if tag.RowsAffected() == 0 {
-		return Lead{}, ErrNotFound
+		return ErrNotFound
 	}
-	return s.get(ctx, orgID, id)
+	return nil
+}
+
+// advance moves a lead along the lifecycle and optionally reschedules the next
+// touch, in one statement — the two always change together in the UI, and doing
+// them separately would leave a window where a lead is "call booked" with no call
+// in the diary.
+//
+// `clearFollowUp` distinguishes "leave it alone" (nil date, false) from "there is
+// nothing more to chase" (nil date, true), which a nullable field alone cannot.
+func (s *store) advance(
+	ctx context.Context, orgID, id, stage string, followUp *time.Time, clearFollowUp bool,
+) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE leads
+		 SET stage = $3,
+		     follow_up_at = CASE
+		       WHEN $5 THEN NULL
+		       WHEN $4::date IS NOT NULL THEN $4::date
+		       ELSE follow_up_at
+		     END,
+		     updated_at = now()
+		 WHERE org_id = $1 AND id = $2 AND converted_at IS NULL`,
+		orgID, id, stage, followUp, clearFollowUp)
+	if err != nil {
+		return translate(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return s.explainWriteMiss(ctx, orgID, id)
+	}
+	return nil
 }
 
 func (s *store) delete(ctx context.Context, orgID, id string) error {
@@ -147,90 +260,29 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 	return nil
 }
 
-// move places a lead at `index` within `stage` and renumbers that column.
-//
-// Renumbering the whole destination column (rather than fractional indexing
-// between neighbours) keeps positions exact forever: no precision drift, no
-// periodic compaction, and a column is small enough that one UPDATE covers it.
-// The whole thing runs in a transaction so a concurrent move can't interleave.
-func (s *store) move(ctx context.Context, orgID, id, stage string, index int) (Lead, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Lead{}, err
+// explainWriteMiss tells "no such lead" apart from "already converted".
+func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
+	var convertedAt *time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT converted_at FROM leads WHERE org_id = $1 AND id = $2`, orgID, id).Scan(&convertedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+		return ErrNotFound
+	case err != nil:
+		return err
+	case convertedAt != nil:
+		return ErrAlreadyConverted
+	default:
+		return ErrNotFound
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	// Claim the lead and set its stage first, so the ordering read below sees it
-	// in the destination column.
-	tag, err := tx.Exec(ctx,
-		`UPDATE leads SET stage = $3, updated_at = now() WHERE org_id = $1 AND id = $2`,
-		orgID, id, stage)
-	if err != nil {
-		return Lead{}, translate(err)
-	}
-	if tag.RowsAffected() == 0 {
-		return Lead{}, ErrNotFound
-	}
-
-	// Current order of the destination column, excluding the moved card.
-	rows, err := tx.Query(ctx,
-		`SELECT id::text FROM leads
-		 WHERE org_id = $1 AND stage = $2 AND id <> $3
-		 ORDER BY position, id`, orgID, stage, id)
-	if err != nil {
-		return Lead{}, err
-	}
-	ids := make([]string, 0, 32)
-	for rows.Next() {
-		var rowID string
-		if err := rows.Scan(&rowID); err != nil {
-			rows.Close()
-			return Lead{}, err
-		}
-		ids = append(ids, rowID)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return Lead{}, err
-	}
-
-	// Insert the moved card at the requested index (clamped to the column).
-	if index < 0 {
-		index = 0
-	}
-	if index > len(ids) {
-		index = len(ids)
-	}
-	ids = append(ids, "")
-	copy(ids[index+1:], ids[index:])
-	ids[index] = id
-
-	positions := make([]float64, len(ids))
-	for i := range ids {
-		positions[i] = float64((i + 1) * positionGap)
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE leads SET position = v.pos
-		 FROM unnest($2::uuid[], $3::float8[]) AS v(id, pos)
-		 WHERE leads.id = v.id AND leads.org_id = $1`,
-		orgID, ids, positions); err != nil {
-		return Lead{}, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return Lead{}, err
-	}
-	return s.get(ctx, orgID, id)
 }
 
-// ownerInOrg reports whether the user is a member of the caller's org. Without
-// this a client could assign a lead to a user in another tenant.
-func (s *store) ownerInOrg(ctx context.Context, orgID, userID string) (bool, error) {
+// refInOrg checks a client-supplied foreign key against the caller's org.
+func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM users WHERE org_id = $1 AND id = $2)`,
-		orgID, userID).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE org_id = $1 AND id = $2)`,
+		orgID, id).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return false, nil
@@ -274,17 +326,20 @@ type rowScanner interface {
 func scanLead(row rowScanner) (Lead, error) {
 	var l Lead
 	err := row.Scan(
-		&l.ID, &l.FirstName, &l.LastName, &l.Email, &l.Phone, &l.Company, &l.Source,
-		&l.Notes, &l.Value, &l.Stage, &l.OwnerUserID, &l.OwnerName, &l.OwnerEmail,
-		&l.Position, &l.CreatedAt, &l.UpdatedAt,
-		&l.ConvertedAt, &l.ConvertedDealID, &l.ConvertedContactID)
+		&l.ID, &l.FirstName, &l.LastName, &l.Title, &l.Email, &l.Phone,
+		&l.LinkedIn, &l.Source, &l.Notes, &l.Value, &l.Stage,
+		&l.AccountID, &l.AccountName, &l.AccountIndustry, &l.Company,
+		&l.ContactID,
+		&l.OwnerUserID, &l.OwnerName, &l.OwnerEmail,
+		&l.FollowUpAt, &l.Overdue, &l.DueToday, &l.LastContactedAt,
+		&l.ConvertedAt, &l.ConvertedDealID, &l.ConvertedContactID,
+		&l.CreatedAt, &l.UpdatedAt)
 	if err != nil {
 		return Lead{}, translate(err)
 	}
 	return l, nil
 }
 
-// translate maps pgx/Postgres failures onto the module's domain errors.
 func translate(err error) error {
 	switch {
 	case err == nil:
@@ -292,10 +347,9 @@ func translate(err error) error {
 	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
 		return ErrNotFound
 	case isPgCode(err, pgForeignKeyViolation):
-		return ErrOwnerNotFound
+		return ErrRefNotFound
 	case isPgCode(err, pgCheckViolation):
-		// Only the stage CHECK can fire here; the service validates stages
-		// first, so this is the belt to that braces.
+		// Only the stage CHECK can fire; the service validates stages first.
 		return ErrNotFound
 	default:
 		return err

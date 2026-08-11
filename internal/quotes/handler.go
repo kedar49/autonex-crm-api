@@ -8,19 +8,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
 
 // Handler exposes the quotes module's HTTP API.
 type Handler struct {
-	svc    *Service
+	svc *Service
+	// pool is here only to write system events to the activity log; the
+	// module's own data always goes through svc.
+	pool   *pgxpool.Pool
 	secret string
 }
 
 // NewHandler wires the quotes service to the pgx pool.
 func NewHandler(pool *pgxpool.Pool, secret string) *Handler {
-	return &Handler{svc: NewService(pool), secret: secret}
+	return &Handler{svc: NewService(pool), pool: pool, secret: secret}
 }
 
 // Routes returns the quotes sub-router, mounted at /api/v1/quotes.
@@ -94,11 +98,18 @@ func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	quote, err := h.svc.SetStatus(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"), in.Status)
+	ctx := r.Context()
+	quote, err := h.svc.SetStatus(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), in.Status)
 	if err != nil {
 		writeErr(w, err, "could not update the quote's status")
 		return
 	}
+
+	activities.Log(ctx, h.pool, activities.Entry{
+		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+		QuoteID: quote.ID, DealID: deref(quote.DealID), AccountID: deref(quote.AccountID),
+		Subject: "Quote " + quote.Number + " marked " + quote.Status,
+	})
 	httpx.WriteJSON(w, http.StatusOK, quote)
 }
 

@@ -315,3 +315,11 @@ func clampPage(limit, offset int) (int, int) {
 	}
 	return limit, offset
 }
+
+// deref turns an optional id into the empty string activities.Entry expects.
+func deref(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}

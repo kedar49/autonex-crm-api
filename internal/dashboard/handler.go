@@ -100,7 +100,7 @@ func (h *Handler) build(ctx context.Context, orgID string) (Summary, error) {
 	for _, s := range leadStats {
 		counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Value}
 	}
-	sum.Leads = rollUp(leads.Stages, "won", []string{"lost"}, counts)
+	sum.Leads = rollUp(leads.Stages, "converted", []string{"dropped"}, counts)
 
 	dealStats, err := h.deals.Stats(ctx, orgID)
 	if err != nil {
