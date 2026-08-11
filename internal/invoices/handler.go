@@ -9,19 +9,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
 
 // Handler exposes the invoices module's HTTP API.
 type Handler struct {
-	svc    *Service
+	svc *Service
+	// pool is here only to write system events to the activity log; the
+	// module's own data always goes through svc.
+	pool   *pgxpool.Pool
 	secret string
 }
 
 // NewHandler wires the invoices service to the pgx pool.
 func NewHandler(pool *pgxpool.Pool, secret string) *Handler {
-	return &Handler{svc: NewService(pool), secret: secret}
+	return &Handler{svc: NewService(pool), pool: pool, secret: secret}
 }
 
 // Routes returns the invoices sub-router, mounted at /api/v1/invoices.
@@ -113,11 +117,18 @@ func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	invoice, err := h.svc.SetStatus(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"), in.Status)
+	ctx := r.Context()
+	invoice, err := h.svc.SetStatus(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), in.Status)
 	if err != nil {
 		writeErr(w, err, "could not update the invoice's status")
 		return
 	}
+
+	activities.Log(ctx, h.pool, activities.Entry{
+		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+		InvoiceID: invoice.ID, DealID: deref(invoice.DealID), AccountID: deref(invoice.AccountID),
+		Subject: "Invoice " + invoice.Number + " marked " + invoice.Status,
+	})
 	httpx.WriteJSON(w, http.StatusOK, invoice)
 }
 
@@ -126,11 +137,18 @@ func (h *Handler) recordPayment(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	invoice, err := h.svc.RecordPayment(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"), in)
+	ctx := r.Context()
+	invoice, err := h.svc.RecordPayment(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), in)
 	if err != nil {
 		writeErr(w, err, "could not record that payment")
 		return
 	}
+
+	activities.Log(ctx, h.pool, activities.Entry{
+		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+		InvoiceID: invoice.ID, DealID: deref(invoice.DealID), AccountID: deref(invoice.AccountID),
+		Subject: "Payment recorded on " + invoice.Number,
+	})
 	httpx.WriteJSON(w, http.StatusCreated, invoice)
 }
 

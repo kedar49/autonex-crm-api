@@ -211,3 +211,30 @@ func validate(in Input) error {
 	}
 	return nil
 }
+
+// StageLabel renders a stage for humans (timeline entries, notifications).
+// The UI has its own copy for display; this is for text the server generates.
+func StageLabel(stage string) string {
+	switch stage {
+	case "lead":
+		return "Lead"
+	case "qualified":
+		return "Qualified"
+	case "proposal":
+		return "Proposal"
+	case "won":
+		return "Won"
+	case "lost":
+		return "Lost"
+	default:
+		return stage
+	}
+}
+
+// deref turns an optional id into the empty string activities.Entry expects.
+func deref(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}

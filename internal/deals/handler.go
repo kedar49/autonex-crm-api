@@ -7,19 +7,23 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
 
 // Handler exposes the deals module's HTTP API.
 type Handler struct {
-	svc    *Service
+	svc *Service
+	// pool is here only to write system events to the activity log; the
+	// module's own data always goes through svc.
+	pool   *pgxpool.Pool
 	secret string
 }
 
 // NewHandler wires the deals service to the pgx pool.
 func NewHandler(pool *pgxpool.Pool, secret string) *Handler {
-	return &Handler{svc: NewService(pool), secret: secret}
+	return &Handler{svc: NewService(pool), pool: pool, secret: secret}
 }
 
 // Routes returns the deals sub-router, mounted at /api/v1/deals.
@@ -60,11 +64,18 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &in) {
 		return
 	}
-	deal, err := h.svc.Create(r.Context(), middleware.OrgID(r.Context()), in)
+	ctx := r.Context()
+	deal, err := h.svc.Create(ctx, middleware.OrgID(ctx), in)
 	if err != nil {
 		writeErr(w, err, "could not create deal")
 		return
 	}
+
+	activities.Log(ctx, h.pool, activities.Entry{
+		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+		DealID: deal.ID, AccountID: deref(deal.AccountID), ContactID: deref(deal.ContactID),
+		Subject: "Deal created", Body: deal.Title,
+	})
 	httpx.WriteJSON(w, http.StatusCreated, deal)
 }
 
@@ -86,11 +97,18 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 	if !httpx.DecodeJSON(w, r, &mv) {
 		return
 	}
-	deal, err := h.svc.Move(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"), mv)
+	ctx := r.Context()
+	deal, err := h.svc.Move(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), mv)
 	if err != nil {
 		writeErr(w, err, "could not move deal")
 		return
 	}
+
+	activities.Log(ctx, h.pool, activities.Entry{
+		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+		DealID:  deal.ID,
+		Subject: "Deal moved to " + StageLabel(deal.Stage),
+	})
 	httpx.WriteJSON(w, http.StatusOK, deal)
 }
 
