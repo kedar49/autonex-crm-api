@@ -57,7 +57,7 @@ func Load() Config {
 		JWTAccessTTL:     getdur("JWT_ACCESS_TTL", 15*time.Minute),
 		JWTRefreshTTL:    getdur("JWT_REFRESH_TTL", 30*24*time.Hour),
 		NATSURL:          getenv("NATS_URL", "nats://localhost:4222"),
-		GatewayAddr:      getenv("GATEWAY_ADDR", ":8080"),
+		GatewayAddr:      gatewayAddr(),
 		WebAppURL:        getenv("WEB_APP_URL", "http://localhost:4321"),
 		OIDCRedirectBase: getenv("OIDC_REDIRECT_BASE", "http://localhost:8080/api/v1/auth/sso"),
 		Timezone:         getenv("APP_TIMEZONE", "UTC"),
@@ -86,6 +86,19 @@ func loadDotenv() {
 		}
 		dir = parent
 	}
+}
+
+// gatewayAddr resolves the address the HTTP server listens on.
+//
+// PORT wins because that is how every PaaS (Railway included) hands a container
+// its assigned port, and it is the only port routed to from the edge — a
+// GATEWAY_ADDR carried over from a local .env would bind the wrong one and every
+// health check would fail. GATEWAY_ADDR stays as the local knob.
+func gatewayAddr() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return ":" + p
+	}
+	return getenv("GATEWAY_ADDR", ":8080")
 }
 
 func loadOAuthCreds() map[string]OAuthCredentials {

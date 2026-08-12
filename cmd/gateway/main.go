@@ -45,6 +45,10 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// gzip the JSON list payloads — they compress roughly 5-10x, which is the
+	// single largest win on a mobile connection. Already-compressed content types
+	// are skipped by the middleware.
+	r.Use(middleware.Compress(5))
 	// Allow the browser SPA (cfg.WebAppURL) to call the API cross-origin.
 	r.Use(appmw.CORS(cfg.WebAppURL))
 
