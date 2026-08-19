@@ -30,6 +30,9 @@ func RequireJWT(secret string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if raw == "" {
+				raw = r.URL.Query().Get("token")
+			}
+			if raw == "" {
 				httpx.WriteError(w, http.StatusUnauthorized, "missing token")
 				return
 			}

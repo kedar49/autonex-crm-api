@@ -1,8 +1,5 @@
--- SQL reference for the eventual sqlc migration; the module currently runs the
--- hand-written pgx repository in store.go. Keep the two in sync.
---
--- Every statement filters on org_id. A query here without it is a tenant-data
--- leak, not a missing filter.
+-- SQL queries for deals package.
+-- Every statement filters on org_id.
 
 -- name: ListDealsBoard :many
 SELECT d.*, u.name AS owner_name, u.email AS owner_email,
@@ -49,12 +46,12 @@ ORDER BY position, id;
 
 -- name: ReorderDealStage :exec
 UPDATE deals SET position = v.pos
-FROM unnest($2::uuid[], $3::float8[]) AS v(id, pos)
+FROM (
+  SELECT unnest($2::uuid[]) AS id, unnest($3::float8[]) AS pos
+) v
 WHERE deals.id = v.id AND deals.org_id = $1;
 
 -- name: RefInOrg :one
--- Guards the two client-supplied FKs (owner, contact). The table name is
--- substituted by the caller from a literal, never from user input.
 SELECT EXISTS (SELECT 1 FROM users WHERE org_id = $1 AND id = $2);
 
 -- name: DealStats :many
