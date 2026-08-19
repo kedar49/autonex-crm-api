@@ -1,5 +1,4 @@
 version: "2"
-# Schema-per-domain: each domain owns its queries + generated code under internal/<domain>/db.
 sql:
   - engine: "postgresql"
     schema: "migrations"
@@ -18,6 +17,66 @@ sql:
       go:
         package: "contactsdb"
         out: "internal/contacts/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/leads/db/queries.sql"
+    gen:
+      go:
+        package: "leadsdb"
+        out: "internal/leads/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/deals/db/queries.sql"
+    gen:
+      go:
+        package: "dealsdb"
+        out: "internal/deals/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/products/db/queries.sql"
+    gen:
+      go:
+        package: "productsdb"
+        out: "internal/products/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/audit/db/queries.sql"
+    gen:
+      go:
+        package: "auditdb"
+        out: "internal/audit/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/followups/db/queries.sql"
+    gen:
+      go:
+        package: "followupsdb"
+        out: "internal/followups/db"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/integrations/db/queries.sql"
+    gen:
+      go:
+        package: "integrationsdb"
+        out: "internal/integrations/db"
         sql_package: "pgx/v5"
         emit_json_tags: true
         emit_pointers_for_null_types: true
