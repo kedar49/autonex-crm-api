@@ -2,6 +2,7 @@ package invoices
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/activities"
+	"github.com/go-crm/services/internal/pdf"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -39,6 +41,7 @@ func (h *Handler) Routes() chi.Router {
 	// so it gets its own route rather than an overloaded POST body.
 	r.Post("/from-quote", h.fromQuote)
 	r.Get("/{id}", h.get)
+	r.Get("/{id}/pdf", h.downloadPDF)
 	r.Put("/{id}", h.update)
 	r.Delete("/{id}", h.remove)
 	r.Post("/{id}/status", h.setStatus)
@@ -158,6 +161,82 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) downloadPDF(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	invoice, err := h.svc.Get(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, err, "could not load invoice")
+		return
+	}
+
+	pdfGen := pdf.NewGenerator()
+
+	items := make([]pdf.InvoiceItemData, len(invoice.Items))
+	for i, item := range invoice.Items {
+		taxable := item.Quantity * item.UnitPrice
+		taxAmt := taxable * (item.TaxPercent / 100.0)
+		items[i] = pdf.InvoiceItemData{
+			SrNo:          i + 1,
+			Description:   item.Description,
+			HSNSAC:        "998313",
+			Qty:           item.Quantity,
+			UnitPrice:     item.UnitPrice,
+			TaxableValue:  taxable,
+			CGSTRate:      item.TaxPercent / 2.0,
+			CGSTAmount:    taxAmt / 2.0,
+			SGSTRate:      item.TaxPercent / 2.0,
+			SGSTAmount:    taxAmt / 2.0,
+			TotalAmount:   taxable + taxAmt,
+		}
+	}
+
+	accountName := "Client Account"
+	if invoice.AccountName != nil && *invoice.AccountName != "" {
+		accountName = *invoice.AccountName
+	}
+
+	issueDateStr := invoice.CreatedAt.Format("02-Jan-2006")
+	if invoice.IssueDate != nil {
+		issueDateStr = invoice.IssueDate.Format("02-Jan-2006")
+	}
+
+	data := pdf.InvoiceData{
+		IssuerName:     "AUTONEX AI 360 PRIVATE LIMITED",
+		IssuerAddress:  "908, Lodha Supremus, Saki Vihar Road, Powai, Mumbai - 400072",
+		IssuerContact:  "+91 98765 43210",
+		IssuerEmail:    "billing@autonexai.com",
+		IssuerGSTIN:    "27ABDCA3903H1ZX",
+		IssuerPAN:      "ABDCA3903H",
+		InvoiceNumber:  invoice.Number,
+		InvoiceDate:    issueDateStr,
+		ClientName:     accountName,
+		ClientAddress:  "Mumbai, Maharashtra",
+		ClientGSTIN:    "27AAACC1234D1Z5",
+		Items:          items,
+		TotalBeforeTax: invoice.Subtotal,
+		CGSTTotal:      invoice.TaxTotal / 2.0,
+		SGSTTotal:      invoice.TaxTotal / 2.0,
+		TaxTotal:       invoice.TaxTotal,
+		GrandTotal:     invoice.Total,
+		AmountInWords:  pdf.ConvertNumberToWords(invoice.Total),
+		BankName:       "HDFC Bank",
+		BankBranch:     "Powai Branch",
+		AccountNumber:  "50200012345678",
+		IFSCCode:       "HDFC0001234",
+	}
+
+	reader, err := pdfGen.GenerateInvoiceHTML(ctx, data)
+	if err != nil {
+		httpx.WriteServerError(w, "pdf rendering failed", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\"Invoice-"+invoice.Number+".html\"")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, reader)
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {

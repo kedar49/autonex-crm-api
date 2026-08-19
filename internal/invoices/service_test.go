@@ -127,7 +127,7 @@ func TestInputCarriesNoMoney(t *testing.T) {
 	_ = in.Items
 	var inv Invoice
 	inv.Total, inv.AmountPaid, inv.Balance = 1, 1, 0
-	if inv.Balance != 0 {
+	if inv.Total != 1 || inv.AmountPaid != 1 || inv.Balance != 0 {
 		t.Fatal("unreachable")
 	}
 }

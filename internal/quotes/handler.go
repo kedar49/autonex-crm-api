@@ -2,6 +2,7 @@ package quotes
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/activities"
+	"github.com/go-crm/services/internal/pdf"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -35,6 +37,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
 	r.Get("/{id}", h.get)
+	r.Get("/{id}/pdf", h.downloadPDF)
 	r.Put("/{id}", h.update)
 	r.Delete("/{id}", h.remove)
 	// Separate from PUT: a lifecycle move is not a field edit, and it is allowed
@@ -119,6 +122,75 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) downloadPDF(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	quote, err := h.svc.Get(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, err, "could not load quote")
+		return
+	}
+
+	pdfGen := pdf.NewGenerator()
+
+	items := make([]pdf.POItemData, len(quote.Items))
+	for i, item := range quote.Items {
+		items[i] = pdf.POItemData{
+			SrNo:        i + 1,
+			Description: item.Description,
+			Qty:         item.Quantity,
+			UnitPrice:   item.UnitPrice,
+			Amount:      item.Quantity * item.UnitPrice,
+		}
+	}
+
+	accountName := "Vendor Account"
+	if quote.AccountName != nil && *quote.AccountName != "" {
+		accountName = *quote.AccountName
+	}
+
+	validUntil := ""
+	if quote.ValidUntil != nil {
+		validUntil = quote.ValidUntil.Format("02-Jan-2006")
+	}
+
+	poData := pdf.POData{
+		PONumber:        quote.Number,
+		PODate:          quote.CreatedAt.Format("02-Jan-2006"),
+		DeliveryDate:    validUntil,
+		PaymentTerms:    "Net 30",
+		PlaceOfDelivery: "Powai, Mumbai",
+		PreparedBy:      "Autonex CRM System",
+		VendorName:      accountName,
+		ContactPerson:   "Procurement Team",
+		VendorAddress:   "Mumbai, Maharashtra",
+		VendorGSTIN:     "27AAACC1234D1Z5",
+		VendorPhone:     "+91 98765 00000",
+		VendorEmail:     "vendor@example.com",
+		Items:           items,
+		Subtotal:        quote.Subtotal,
+		TaxRate:         18.0,
+		TaxAmount:       quote.TaxTotal,
+		GrandTotal:      quote.Total,
+		Notes:           []string{"PO subject to Autonex standard terms of procurement.", "All deliveries must include packing slip with PO Number."},
+		ExecutionBy:     "Nikhil Gawade",
+		ExecutionTitle:  "Founder & CEO",
+		SignatoryName:   "NIKHIL SUNIL GAWADE",
+		SignatoryRole:   "Director",
+		SignatoryDIN:    "11217265",
+	}
+
+	reader, err := pdfGen.GeneratePOHTML(ctx, poData)
+	if err != nil {
+		httpx.WriteServerError(w, "pdf rendering failed", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\"PO-"+quote.Number+".html\"")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, reader)
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
