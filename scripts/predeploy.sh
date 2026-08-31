@@ -16,6 +16,11 @@ fi
 # failure diagnosis needs, and none of them are secret.
 echo "pre-deploy: target $(printf '%s' "$DATABASE_URL" | sed -E 's#(://[^:]*:)[^@]*@#\1***@#')"
 
+# Say which migration set this image actually carries. A redeploy of an older
+# deployment runs old code against current variables, and the only other way to
+# notice is to count the migration steps in the output after the fact.
+echo "pre-deploy: $(ls /app/migrations/*.up.sql 2>/dev/null | wc -l | tr -d ' ') migration file(s) in image"
+
 # Fingerprint the password without revealing it, so a value that differs between
 # .env and this service can be spotted by comparison rather than by guesswork.
 userinfo=${DATABASE_URL#*://}
