@@ -27,22 +27,22 @@ func TestNormalizeDefaultsStageAndBlanksToNil(t *testing.T) {
 	if in.OwnerUserID != nil {
 		t.Errorf("OwnerUserID = %q, want nil", *in.OwnerUserID)
 	}
-	if in.Stage != "lead" {
-		t.Errorf("Stage = %q, want lead", in.Stage)
+	if in.Stage != "discovery" {
+		t.Errorf("Stage = %q, want discovery", in.Stage)
 	}
 }
 
 func TestValidate(t *testing.T) {
-	if err := validate(Input{Title: "Acme renewal", Stage: "lead"}); err != nil {
+	if err := validate(Input{Title: "Acme renewal", Stage: "discovery"}); err != nil {
 		t.Fatalf("minimal deal rejected: %v", err)
 	}
 
 	tests := map[string]Input{
-		"no title":        {Stage: "lead"},
+		"no title":        {Stage: "discovery"},
 		"unknown stage":   {Title: "X", Stage: "contacted"}, // a lead stage, not a deal stage
 		"empty stage":     {Title: "X", Stage: ""},
-		"negative amount": {Title: "X", Stage: "lead", Amount: -1},
-		"absurd amount":   {Title: "X", Stage: "lead", Amount: 1e13},
+		"negative amount": {Title: "X", Stage: "discovery", Amount: -1},
+		"absurd amount":   {Title: "X", Stage: "discovery", Amount: 1e13},
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -61,13 +61,13 @@ func TestStagesAreDistinctFromLeadStages(t *testing.T) {
 	// The two pipelines are intentionally different shapes. If they ever get
 	// unified, that should be a deliberate change with a migration behind it —
 	// not something that drifts in silently.
-	if len(Stages) != 5 {
-		t.Fatalf("len(Stages) = %d, want 5 — keep in sync with the CHECK constraint", len(Stages))
+	if len(Stages) != 6 {
+		t.Fatalf("len(Stages) = %d, want 6 — keep in sync with the CHECK constraint", len(Stages))
 	}
 	if ValidStage("contacted") {
 		t.Error(`"contacted" is a lead stage and must not be valid for a deal`)
 	}
-	if leads.ValidStage("lead") {
-		t.Error(`"lead" is a deal stage and must not be valid for a lead`)
+	if leads.ValidStage("discovery") {
+		t.Error(`"discovery" is a deal stage and must not be valid for a lead`)
 	}
 }
