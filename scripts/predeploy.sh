@@ -16,6 +16,13 @@ fi
 # failure diagnosis needs, and none of them are secret.
 echo "pre-deploy: target $(printf '%s' "$DATABASE_URL" | sed -E 's#(://[^:]*:)[^@]*@#\1***@#')"
 
+# Fingerprint the password without revealing it, so a value that differs between
+# .env and this service can be spotted by comparison rather than by guesswork.
+userinfo=${DATABASE_URL#*://}
+userinfo=${userinfo%%@*}
+pw=${userinfo#*:}
+echo "pre-deploy: password ${#pw} chars, $(printf '%s' "$pw" | tr -cd '%' | wc -c | tr -d ' ') percent-escape(s)"
+
 case "$DATABASE_URL" in
     *db.*.supabase.co*)
         echo "pre-deploy: WARNING direct Supabase host is IPv6-only and Railway has no IPv6 egress." >&2
