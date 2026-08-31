@@ -420,7 +420,7 @@ CREATE TABLE IF NOT EXISTS slack_channels (
     entity_id        UUID,
     channel_id       TEXT,
     slack_channel_id TEXT UNIQUE,
-    channel_name     TEXT NOT NULL,
+    channel_name     TEXT NOT NULL DEFAULT '',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
