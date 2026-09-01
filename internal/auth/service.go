@@ -41,7 +41,7 @@ func newService(pool *pgxpool.Pool, cfg config.Config) *Service {
 }
 
 // Register creates a password-backed user and starts a session.
-func (s *Service) Register(ctx context.Context, email, password string) (Session, error) {
+func (s *Service) Register(ctx context.Context, email, password, name string) (Session, error) {
 	switch _, err := s.store.userByEmail(ctx, email); {
 	case err == nil:
 		return Session{}, ErrEmailTaken
@@ -53,8 +53,15 @@ func (s *Service) Register(ctx context.Context, email, password string) (Session
 	if err != nil {
 		return Session{}, err
 	}
+
+	var namePtr *string
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		namePtr = &trimmed
+	}
+
 	u, err := s.store.createUserWithOrg(ctx, newUser{
 		Email:        email,
+		Name:         namePtr,
 		OrgName:      defaultOrgName(email),
 		PasswordHash: &hash,
 		AuthProvider: "password",
