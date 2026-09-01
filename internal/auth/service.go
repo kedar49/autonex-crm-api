@@ -124,6 +124,7 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (Sessi
 	if id.Email == "" {
 		return Session{}, errors.New("provider returned no email")
 	}
+	id.Email = strings.TrimSpace(strings.ToLower(id.Email))
 
 	// 1. Known SSO identity → log in.
 	u, err := s.store.userByProvider(ctx, provider, id.ProviderUserID)
@@ -134,10 +135,12 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (Sessi
 		return Session{}, err
 	}
 
-	// 2. Email already registered under a different method → refuse to
-	//    auto-link (would let SSO take over a password account).
+	// 2. Email already registered under the same provider → link provider ID if missing, or refuse auto-link across different methods.
 	if existing, e := s.store.userByEmail(ctx, id.Email); e == nil {
 		if existing.AuthProvider == provider {
+			if existing.ProviderUserID == nil || *existing.ProviderUserID == "" {
+				_ = s.store.updateUserProviderID(ctx, existing.ID, id.ProviderUserID)
+			}
 			return IssueSession(ctx, s.pool, s.cfg, existing)
 		}
 		return Session{}, ErrEmailTaken
@@ -146,8 +149,13 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (Sessi
 	}
 
 	// 3. First time → provision a new SSO user with their own workspace.
+	var namePtr *string
+	if id.Name != "" {
+		namePtr = &id.Name
+	}
 	u, err = s.store.createUserWithOrg(ctx, newUser{
 		Email:          id.Email,
+		Name:           namePtr,
 		OrgName:        defaultOrgName(id.Email),
 		AuthProvider:   provider,
 		ProviderUserID: &id.ProviderUserID,
