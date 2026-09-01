@@ -16,6 +16,7 @@ import (
 type ssoIdentity struct {
 	ProviderUserID string
 	Email          string
+	Name           string
 }
 
 // providerReg holds the static endpoints for a known provider. Client
@@ -87,16 +88,19 @@ func (p *oauthProvider) identity(ctx context.Context, tok *oauth2.Token) (ssoIde
 		var u struct {
 			Sub   string `json:"sub"`
 			Email string `json:"email"`
+			Name  string `json:"name"`
 		}
 		if err := json.Unmarshal(body, &u); err != nil {
 			return ssoIdentity{}, err
 		}
-		return ssoIdentity{ProviderUserID: u.Sub, Email: u.Email}, nil
+		return ssoIdentity{ProviderUserID: u.Sub, Email: u.Email, Name: u.Name}, nil
 
 	case "github":
 		var u struct {
 			ID    int64  `json:"id"`
 			Email string `json:"email"`
+			Name  string `json:"name"`
+			Login string `json:"login"`
 		}
 		if err := json.Unmarshal(body, &u); err != nil {
 			return ssoIdentity{}, err
@@ -108,7 +112,11 @@ func (p *oauthProvider) identity(ctx context.Context, tok *oauth2.Token) (ssoIde
 				return ssoIdentity{}, err
 			}
 		}
-		return ssoIdentity{ProviderUserID: fmt.Sprintf("%d", u.ID), Email: email}, nil
+		name := u.Name
+		if name == "" {
+			name = u.Login
+		}
+		return ssoIdentity{ProviderUserID: fmt.Sprintf("%d", u.ID), Email: email, Name: name}, nil
 
 	default:
 		return ssoIdentity{}, fmt.Errorf("unsupported provider %q", p.name)

@@ -28,6 +28,7 @@ type User struct {
 // the SSO path (each leaves the other's fields nil).
 type newUser struct {
 	Email          string
+	Name           *string
 	OrgName        string
 	PasswordHash   *string
 	AuthProvider   string
@@ -57,6 +58,13 @@ func (s *store) userByProvider(ctx context.Context, provider, providerUserID str
 	return scanUser(row)
 }
 
+func (s *store) updateUserProviderID(ctx context.Context, userID, providerUserID string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE users SET provider_user_id = $2 WHERE id = $1 AND (provider_user_id IS NULL OR provider_user_id = '')`,
+		userID, providerUserID)
+	return err
+}
+
 // createUserWithOrg provisions a personal organization and its first user in a
 // single transaction. users.org_id is NOT NULL and every CRM query is scoped by
 // it, so a user without an org could not reach any data — the two rows have to
@@ -78,11 +86,24 @@ func (s *store) createUserWithOrg(ctx context.Context, in newUser) (User, error)
 	}
 
 	u, err := scanUser(tx.QueryRow(ctx,
-		`INSERT INTO users (email, org_id, password_hash, auth_provider, provider_user_id)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO users (email, org_id, password_hash, auth_provider, provider_user_id, name)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING `+userColumns,
-		in.Email, orgID, in.PasswordHash, in.AuthProvider, in.ProviderUserID))
+		in.Email, orgID, in.PasswordHash, in.AuthProvider, in.ProviderUserID, in.Name))
 	if err != nil {
+		return User{}, err
+	}
+
+	fullName := in.Email
+	if in.Name != nil && *in.Name != "" {
+		fullName = *in.Name
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO profiles (id, full_name, role)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name`,
+		u.ID, fullName, "owner",
+	); err != nil {
 		return User{}, err
 	}
 

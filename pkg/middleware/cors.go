@@ -1,25 +1,19 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // CORS allows the browser SPA (served from allowedOrigin) to call the API from a
 // different origin.
-//
-// Credentials ARE enabled, because the refresh token lives in an HttpOnly cookie
-// (see internal/auth/refresh.go) and the browser will only send it — and only
-// honour Set-Cookie — on a credentialed cross-origin request. That is safe here
-// only because a single explicit origin is echoed: the spec forbids pairing
-// Allow-Credentials with "*", and echoing an arbitrary request Origin would let
-// any site read authenticated responses.
-//
-// An empty allowedOrigin disables CORS (no headers added) — useful when the API
-// and web app share an origin behind a reverse proxy.
 func CORS(allowedOrigin string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if allowedOrigin != "" && r.Header.Get("Origin") == allowedOrigin {
+			reqOrigin := r.Header.Get("Origin")
+			if isAllowedOrigin(allowedOrigin, reqOrigin) {
 				h := w.Header()
-				h.Set("Access-Control-Allow-Origin", allowedOrigin)
+				h.Set("Access-Control-Allow-Origin", reqOrigin)
 				// Responses vary by Origin, so caches must not reuse them across origins.
 				h.Add("Vary", "Origin")
 				h.Set("Access-Control-Allow-Credentials", "true")
@@ -36,4 +30,21 @@ func CORS(allowedOrigin string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func isAllowedOrigin(allowed, origin string) bool {
+	if allowed == "" || origin == "" {
+		return false
+	}
+	allowed = strings.TrimRight(allowed, "/")
+	origin = strings.TrimRight(origin, "/")
+	if origin == allowed {
+		return true
+	}
+	// Support localhost / 127.0.0.1 dev variations
+	if (strings.HasPrefix(allowed, "http://localhost:") || strings.HasPrefix(allowed, "http://127.0.0.1:")) &&
+		(strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:")) {
+		return true
+	}
+	return false
 }

@@ -103,7 +103,9 @@ func (h *Handler) ssoStart(w http.ResponseWriter, r *http.Request) {
 	}
 	authURL, err := h.svc.AuthCodeURL(provider, state)
 	if errors.Is(err, ErrUnknownProvider) {
-		httpx.WriteError(w, http.StatusNotFound, "unknown or unconfigured provider")
+		loginErrURL := strings.TrimRight(h.cfg.WebAppURL, "/") + "/app/login?error=" +
+			url.QueryEscape("SSO provider '"+provider+"' is not configured on the server. Please check your .env configuration.")
+		http.Redirect(w, r, loginErrURL, http.StatusFound)
 		return
 	}
 	if err != nil {
@@ -126,10 +128,15 @@ func (h *Handler) ssoStart(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 
+	redirectError := func(errMsg string) {
+		target := strings.TrimRight(h.cfg.WebAppURL, "/") + "/app/login?error=" + url.QueryEscape(errMsg)
+		http.Redirect(w, r, target, http.StatusFound)
+	}
+
 	// CSRF: the state echoed by the provider must match the cookie we set.
 	cookie, err := r.Cookie(ssoStateCookie)
 	if err != nil || cookie.Value == "" || cookie.Value != r.URL.Query().Get("state") {
-		httpx.WriteError(w, http.StatusBadRequest, "invalid state")
+		redirectError("Invalid security state token during SSO login. Please try again.")
 		return
 	}
 	// Consume the state cookie.
@@ -137,20 +144,20 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		httpx.WriteError(w, http.StatusBadRequest, "missing authorization code")
+		redirectError("Missing authorization code from SSO provider.")
 		return
 	}
 
 	session, err := h.svc.CompleteSSO(r.Context(), provider, code)
 	switch {
 	case errors.Is(err, ErrUnknownProvider):
-		httpx.WriteError(w, http.StatusNotFound, "unknown or unconfigured provider")
+		redirectError("SSO provider '" + provider + "' is not configured.")
 		return
 	case errors.Is(err, ErrEmailTaken):
-		httpx.WriteError(w, http.StatusConflict, "that email is already registered with a different login method")
+		redirectError("That email is already registered with a password account. Please log in with your email and password.")
 		return
 	case err != nil:
-		httpx.WriteError(w, http.StatusUnauthorized, "sso login failed")
+		redirectError("SSO authentication failed: " + err.Error())
 		return
 	}
 
