@@ -50,6 +50,7 @@ func (h *Handler) Routes() chi.Router {
 }
 
 type credentials struct {
+	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -64,7 +65,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	session, err := h.svc.Register(r.Context(), in.Email, in.Password)
+	session, err := h.svc.Register(r.Context(), in.Email, in.Password, in.Name)
 	if errors.Is(err, ErrEmailTaken) {
 		httpx.WriteError(w, http.StatusConflict, "email already registered")
 		return
