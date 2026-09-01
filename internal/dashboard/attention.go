@@ -48,51 +48,60 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 		  -- they can never be late.
 		  SELECT 'lead'::text AS kind,
 		         l.id::text   AS id,
-		         btrim(l.first_name || ' ' || coalesce(l.last_name, '')) AS label,
-		         coalesce(a.name, l.company, '')                         AS detail,
-		         (l.follow_up_at - CURRENT_DATE)::int                    AS days,
-		         coalesce(l.value, 0)::float8                            AS amount
+		         coalesce(l.contact_name, '')                AS label,
+		         coalesce(a.name, '')                        AS detail,
+		         (l.next_follow_up_date - CURRENT_DATE)::int AS days,
+		         coalesce(l.value_estimate, 0)::float8       AS amount
 		    FROM leads l
-		    LEFT JOIN accounts a ON a.id = l.account_id
-		   WHERE l.org_id = $1
-		     AND l.stage NOT IN ('converted', 'dropped')
-		     AND l.follow_up_at IS NOT NULL
-		     AND l.follow_up_at <= CURRENT_DATE + 2
+		    LEFT JOIN companies a ON a.id = l.company_id
+		   WHERE l.deleted_at IS NULL
+		     AND l.status NOT IN ('closed', 'not interested')
+		     AND l.next_follow_up_date IS NOT NULL
+		     AND l.next_follow_up_date <= CURRENT_DATE + 2
 
 		  UNION ALL
 
-		  -- Quotes still awaiting an answer as their validity runs out.
-		  SELECT 'quote', q.id::text, q.number,
-		         coalesce(ac.name, q.title, ''),
+		  -- Quotes still awaiting an answer as their validity runs out. The
+		  -- number is derived from the id, and the total from the current version.
+		  SELECT 'quote', q.id::text,
+		         'Q-' || upper(substr(q.id::text, 1, 8)),
+		         coalesce(ac.name, d.title, ''),
 		         (q.valid_until - CURRENT_DATE)::int,
-		         q.total::float8
+		         coalesce(v.total, 0)::float8
 		    FROM quotes q
-		    LEFT JOIN accounts ac ON ac.id = q.account_id
-		   WHERE q.org_id = $1
+		    LEFT JOIN companies      ac ON ac.id = q.company_id
+		    LEFT JOIN deals          d  ON d.id  = q.deal_id
+		    LEFT JOIN quote_versions v  ON v.quote_id = q.id AND v.is_current
+		   WHERE q.deleted_at IS NULL
 		     AND q.status IN ('draft', 'sent')
 		     AND q.valid_until IS NOT NULL
 		     AND q.valid_until <= CURRENT_DATE + 7
 
 		  UNION ALL
 
-		  -- Money owed. Balance is derived, so a part-paid invoice still counts
-		  -- for exactly what is left on it.
-		  SELECT 'invoice', i.id::text, i.number,
-		         coalesce(ac.name, i.title, ''),
+		  -- Money owed. The balance is derived from settled payments, so a
+		  -- part-paid invoice still counts for exactly what is left on it.
+		  SELECT 'invoice', i.id::text, i.invoice_number,
+		         coalesce(ac.name, ''),
 		         (i.due_date - CURRENT_DATE)::int,
-		         (i.total - i.amount_paid)::float8
+		         (i.amount_due - paid.amt)::float8
 		    FROM invoices i
-		    LEFT JOIN accounts ac ON ac.id = i.account_id
-		   WHERE i.org_id = $1
+		    LEFT JOIN companies ac ON ac.id = i.company_id
+		    CROSS JOIN LATERAL (
+		      SELECT COALESCE(sum(amount), 0) AS amt
+		        FROM payments pm
+		       WHERE pm.invoice_id = i.id AND pm.status = 'succeeded'
+		    ) paid
+		   WHERE i.deleted_at IS NULL
 		     AND i.status NOT IN ('paid', 'void')
 		     AND i.due_date IS NOT NULL
 		     AND i.due_date <= CURRENT_DATE + 3
-		     AND i.total > i.amount_paid
+		     AND i.amount_due > paid.amt
 		)
 		SELECT kind, id, label, detail, days, amount
 		  FROM items
 		 ORDER BY days ASC, amount DESC
-		 LIMIT $2`, orgID, attentionLimit)
+		 LIMIT $1`, attentionLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -114,13 +123,14 @@ const recentLimit = 6
 // recent reads the tail of the timeline across every record in the org.
 func (h *Handler) recent(ctx context.Context, orgID string) ([]Recent, error) {
 	rows, err := h.pool.Query(ctx, `
-		SELECT a.kind, a.subject, coalesce(a.body, ''), coalesce(u.name, u.email, ''),
-		       a.occurred_at
+		-- No subject column in this schema; the entity type stands in as the
+		-- one-word heading the timeline row shows above its body.
+		SELECT a.type, a.entity_type, coalesce(a.body, ''),
+		       coalesce(p.full_name, ''), a.occurred_at
 		  FROM activities a
-		  LEFT JOIN users u ON u.id = a.created_by
-		 WHERE a.org_id = $1
+		  LEFT JOIN profiles p ON p.id = a.author_id
 		 ORDER BY a.occurred_at DESC, a.created_at DESC
-		 LIMIT $2`, orgID, recentLimit)
+		 LIMIT $1`, recentLimit)
 	if err != nil {
 		return nil, err
 	}

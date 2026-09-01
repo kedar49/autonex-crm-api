@@ -64,22 +64,42 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
+// This deployment stores an activity's subject as a single (entity_type,
+// entity_id) pair rather than one nullable FK column per entity type. The CASE
+// expressions below fan that pair back out into the six id positions
+// scanActivity reads, so the Go model and the JSON contract are unchanged.
+//
+// There is no subject or duration_minutes column here; both are typed NULLs.
 const activityColumns = `
-	a.id::text, a.kind, a.subject, a.body, a.occurred_at, a.duration_minutes,
-	a.lead_id::text, a.deal_id::text, a.account_id::text, a.contact_id::text,
-	a.quote_id::text, a.invoice_id::text,
-	NULLIF(concat_ws(' ', l.first_name, l.last_name), ''),
+	a.id::text,
+	a.type            AS kind,
+	NULL::text        AS subject,
+	a.body,
+	a.occurred_at,
+	NULL::int         AS duration_minutes,
+	CASE WHEN a.entity_type = 'lead'    THEN a.entity_id::text END,
+	CASE WHEN a.entity_type = 'deal'    THEN a.entity_id::text END,
+	CASE WHEN a.entity_type = 'company' THEN a.entity_id::text END,
+	CASE WHEN a.entity_type = 'contact' THEN a.entity_id::text END,
+	CASE WHEN a.entity_type = 'quote'   THEN a.entity_id::text END,
+	CASE WHEN a.entity_type = 'invoice' THEN a.entity_id::text END,
+	l.contact_name,
 	d.title, acc.name,
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
-	a.created_by::text, u.name, u.email, a.created_at`
+	a.author_id::text AS created_by,
+	p.full_name       AS author_name,
+	NULL::text        AS author_email,
+	a.created_at`
 
+// Each label join is gated on entity_type as well as the id, so a lead and a
+// deal that happen to share a uuid cannot cross-populate each other's label.
 const activityFrom = `
 	FROM activities a
-	LEFT JOIN leads    l   ON l.id = a.lead_id
-	LEFT JOIN deals    d   ON d.id = a.deal_id
-	LEFT JOIN accounts acc ON acc.id = a.account_id
-	LEFT JOIN contacts c   ON c.id = a.contact_id
-	LEFT JOIN users    u   ON u.id = a.created_by `
+	LEFT JOIN leads     l   ON a.entity_type = 'lead'    AND l.id   = a.entity_id
+	LEFT JOIN deals     d   ON a.entity_type = 'deal'    AND d.id   = a.entity_id
+	LEFT JOIN companies acc ON a.entity_type = 'company' AND acc.id = a.entity_id
+	LEFT JOIN contacts  c   ON a.entity_type = 'contact' AND c.id   = a.entity_id
+	LEFT JOIN profiles  p   ON p.id = a.author_id `
 
 // Filter narrows a timeline to one entity. All fields are optional; an empty
 // filter returns the org's whole feed.
@@ -100,16 +120,15 @@ type Filter struct {
 func (s *store) list(ctx context.Context, orgID string, f Filter) ([]Activity, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+activityColumns+activityFrom+
-			`WHERE a.org_id = $1
-			   AND ($2 = '' OR a.lead_id    = $2::uuid)
-			   AND ($3 = '' OR a.deal_id    = $3::uuid)
-			   AND ($4 = '' OR a.account_id = $4::uuid)
-			   AND ($5 = '' OR a.contact_id = $5::uuid)
-			   AND ($6 = '' OR a.quote_id   = $6::uuid)
-			   AND ($7 = '' OR a.invoice_id = $7::uuid)
+			`WHERE ($1 = '' OR (a.entity_type = 'lead'    AND a.entity_id = $1::uuid))
+			   AND ($2 = '' OR (a.entity_type = 'deal'    AND a.entity_id = $2::uuid))
+			   AND ($3 = '' OR (a.entity_type = 'company' AND a.entity_id = $3::uuid))
+			   AND ($4 = '' OR (a.entity_type = 'contact' AND a.entity_id = $4::uuid))
+			   AND ($5 = '' OR (a.entity_type = 'quote'   AND a.entity_id = $5::uuid))
+			   AND ($6 = '' OR (a.entity_type = 'invoice' AND a.entity_id = $6::uuid))
 			 ORDER BY a.occurred_at DESC, a.created_at DESC, a.id
-			 LIMIT $8`,
-		orgID, f.LeadID, f.DealID, f.AccountID, f.ContactID, f.QuoteID, f.InvoiceID, f.Limit)
+			 LIMIT $7`,
+		f.LeadID, f.DealID, f.AccountID, f.ContactID, f.QuoteID, f.InvoiceID, f.Limit)
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -128,20 +147,26 @@ func (s *store) list(ctx context.Context, orgID string, f Filter) ([]Activity, e
 
 func (s *store) get(ctx context.Context, orgID, id string) (Activity, error) {
 	return scanActivity(s.pool.QueryRow(ctx,
-		`SELECT `+activityColumns+activityFrom+`WHERE a.org_id = $1 AND a.id = $2`, orgID, id))
+		`SELECT `+activityColumns+activityFrom+`WHERE a.id = $1`, id))
 }
 
 func (s *store) create(ctx context.Context, orgID, userID string, in Input) (string, error) {
+	entityType, entityID := subjectOf(in)
+	if entityType == "" {
+		return "", ErrRefNotFound
+	}
+
+	// Subject and duration have no column in this schema and are dropped. The
+	// author is a profile, so a caller with no matching profile records none
+	// rather than failing the insert on the foreign key.
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO activities
-		   (org_id, kind, subject, body, occurred_at, duration_minutes,
-		    lead_id, deal_id, account_id, contact_id, quote_id, invoice_id, created_by)
-		 VALUES ($1, $2, $3, $4, COALESCE($5, now()), $6, $7, $8, $9, $10, $11, $12, $13)
+		   (entity_type, entity_id, type, body, occurred_at, author_id)
+		 VALUES ($1, $2::uuid, $3, $4, COALESCE($5, now()),
+		         (SELECT id FROM profiles WHERE id = $6::uuid))
 		 RETURNING id::text`,
-		orgID, in.Kind, in.Subject, in.Body, in.OccurredAt, in.DurationMinutes,
-		in.LeadID, in.DealID, in.AccountID, in.ContactID, in.QuoteID, in.InvoiceID,
-		nilIfEmpty(userID),
+		entityType, entityID, in.Kind, in.Body, in.OccurredAt, nilIfEmpty(userID),
 	).Scan(&id)
 	return id, translate(err)
 }
@@ -151,10 +176,10 @@ func (s *store) create(ctx context.Context, orgID, userID string, in Input) (str
 func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE activities
-		 SET kind = $3, subject = $4, body = $5,
-		     occurred_at = COALESCE($6, occurred_at), duration_minutes = $7
-		 WHERE org_id = $1 AND id = $2 AND kind <> 'system'`,
-		orgID, id, in.Kind, in.Subject, in.Body, in.OccurredAt, in.DurationMinutes)
+		 SET type = $2, body = $3,
+		     occurred_at = COALESCE($4, occurred_at), updated_at = now()
+		 WHERE id = $1 AND type <> 'system'`,
+		id, in.Kind, in.Body, in.OccurredAt)
 	if err != nil {
 		return translate(err)
 	}
@@ -166,7 +191,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 
 func (s *store) delete(ctx context.Context, orgID, id string) error {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM activities WHERE org_id = $1 AND id = $2 AND kind <> 'system'`, orgID, id)
+		`DELETE FROM activities WHERE id = $1 AND type <> 'system'`, id)
 	if err != nil {
 		return translate(err)
 	}
@@ -180,7 +205,7 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 	var kind string
 	err := s.pool.QueryRow(ctx,
-		`SELECT kind FROM activities WHERE org_id = $1 AND id = $2`, orgID, id).Scan(&kind)
+		`SELECT type FROM activities WHERE id = $1`, id).Scan(&kind)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
 		return ErrNotFound
@@ -196,8 +221,7 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE org_id = $1 AND id = $2)`,
-		orgID, id).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return false, nil
@@ -249,4 +273,25 @@ func nilIfEmpty(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// subjectOf reduces the six optional entity ids on an Input to the single
+// (entity_type, entity_id) pair this schema stores. The service rejects an input
+// naming more than one, so first match wins.
+func subjectOf(in Input) (string, string) {
+	switch {
+	case in.LeadID != nil && *in.LeadID != "":
+		return "lead", *in.LeadID
+	case in.DealID != nil && *in.DealID != "":
+		return "deal", *in.DealID
+	case in.AccountID != nil && *in.AccountID != "":
+		return "company", *in.AccountID
+	case in.ContactID != nil && *in.ContactID != "":
+		return "contact", *in.ContactID
+	case in.QuoteID != nil && *in.QuoteID != "":
+		return "quote", *in.QuoteID
+	case in.InvoiceID != nil && *in.InvoiceID != "":
+		return "invoice", *in.InvoiceID
+	}
+	return "", ""
 }

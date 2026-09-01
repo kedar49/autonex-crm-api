@@ -131,7 +131,8 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 	}{
 		{"leads", in.LeadID},
 		{"deals", in.DealID},
-		{"accounts", in.AccountID},
+		// An account is a company in this schema.
+		{"companies", in.AccountID},
 		{"contacts", in.ContactID},
 		{"quotes", in.QuoteID},
 		{"invoices", in.InvoiceID},

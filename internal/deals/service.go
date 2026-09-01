@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Stages is the deal lifecycle, in board order.
-// Matches crm_portal schema and database constraints.
-var Stages = []string{"discovery", "site_assessment", "quote_sent", "negotiation", "won", "lost"}
+// Stages is the deal lifecycle, in board order. These are the values the
+// deployed database enforces through deals_stage_check.
+var Stages = []string{"prospect", "proposal", "negotiation", "won", "lost"}
 
 // maxBoard caps a board fetch — well above a realistic pipeline, low enough that
 // one org can't pull the whole table into memory.
@@ -140,9 +140,10 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 		table string
 		id    *string
 	}{
-		{"users", in.OwnerUserID},
+		// An owner is a profile here, not a row in users. The account link has
+		// no column in this schema, so there is nothing to validate for it.
+		{"profiles", in.OwnerUserID},
 		{"contacts", in.ContactID},
-		{"accounts", in.AccountID},
 	} {
 		if ref.id == nil {
 			continue
@@ -210,12 +211,10 @@ func validate(in Input) error {
 // The UI has its own copy for display; this is for text the server generates.
 func StageLabel(stage string) string {
 	switch stage {
-	case "discovery":
-		return "Discovery"
-	case "site_assessment":
-		return "Site Assessment"
-	case "quote_sent":
-		return "Quote Sent"
+	case "prospect":
+		return "Prospect"
+	case "proposal":
+		return "Proposal"
 	case "negotiation":
 		return "Negotiation"
 	case "won":

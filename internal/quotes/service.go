@@ -10,23 +10,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Statuses is the quote lifecycle, in display order.
-var Statuses = []string{"draft", "sent", "accepted", "declined", "expired"}
+// Statuses is the quote lifecycle, in display order. These are the values the
+// deployed database enforces through quotes_status_check — "approved" and
+// "rejected" rather than the "accepted" and "declined" the original model used.
+var Statuses = []string{"draft", "sent", "approved", "rejected", "expired"}
 
 // transitions is the allowed state machine.
 //
-//	draft → sent → accepted   (terminal: an accepted quote is what an invoice
-//	              ↘ declined   will be raised from)
+//	draft → sent → approved   (terminal: an approved quote is what an invoice
+//	              ↘ rejected   will be raised from)
 //	              ↘ expired
 //
-// declined and expired can be revised back to draft, which is what actually
-// happens when a customer comes back. Accepted deliberately has no way out: it
+// rejected and expired can be revised back to draft, which is what actually
+// happens when a customer comes back. Approved deliberately has no way out: it
 // is the record that a price was agreed.
 var transitions = map[string][]string{
 	"draft":    {"sent"},
-	"sent":     {"accepted", "declined", "expired", "draft"},
-	"accepted": {},
-	"declined": {"draft"},
+	"sent":     {"approved", "rejected", "expired", "draft"},
+	"approved": {},
+	"rejected": {"draft"},
 	"expired":  {"draft"},
 }
 

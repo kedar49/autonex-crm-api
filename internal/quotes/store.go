@@ -5,7 +5,6 @@ package quotes
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -83,31 +82,56 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
+// In this deployment a quote header carries only its deal, company, status,
+// current version and validity; the money lives in the current quote_versions
+// row, and there is no stored document number, title, contact, notes or
+// lifecycle timestamps. Those are derived or selected as typed NULLs so the scan
+// order and the JSON contract are unchanged.
+//
+// The number is derived from the id rather than a counter: it is stable, unique
+// and needs no column, where organizations.quote_seq would hand out numbers this
+// schema has nowhere to store.
 const quoteColumns = `
-	q.id::text, q.number, q.title, q.status, q.currency,
-	q.account_id::text, a.name, q.contact_id::text,
-	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
-	q.deal_id::text, d.title, q.owner_user_id::text, u.name, u.email,
-	q.notes, q.valid_until,
-	q.subtotal::float8, q.discount_total::float8, q.tax_total::float8, q.total::float8,
-	q.sent_at, q.accepted_at, q.declined_at, q.created_at, q.updated_at,
+	q.id::text,
+	'Q-' || upper(substr(q.id::text, 1, 8)) AS number,
+	d.title                                 AS title,
+	q.status,
+	COALESCE(v.currency, 'USD')             AS currency,
+	q.company_id::text                      AS account_id,
+	a.name                                  AS account_name,
+	NULL::text                              AS contact_id,
+	NULL::text                              AS contact_name,
+	q.deal_id::text, d.title,
+	q.created_by::text                      AS owner_user_id,
+	p.full_name                             AS owner_name,
+	NULL::text                              AS owner_email,
+	NULL::text                              AS notes,
+	q.valid_until,
+	COALESCE(v.subtotal, 0)::float8,
+	0::float8                               AS discount_total,
+	COALESCE(v.tax, 0)::float8,
+	COALESCE(v.total, 0)::float8,
+	NULL::timestamptz                       AS sent_at,
+	NULL::timestamptz                       AS accepted_at,
+	NULL::timestamptz                       AS declined_at,
+	q.created_at, q.updated_at,
 	(SELECT count(*) FROM quote_items i WHERE i.quote_id = q.id)`
 
 const quoteFrom = `
 	FROM quotes q
-	LEFT JOIN accounts a ON a.id = q.account_id
-	LEFT JOIN contacts c ON c.id = q.contact_id
-	LEFT JOIN deals    d ON d.id = q.deal_id
-	LEFT JOIN users    u ON u.id = q.owner_user_id `
+	LEFT JOIN companies      a ON a.id = q.company_id
+	LEFT JOIN deals          d ON d.id = q.deal_id
+	LEFT JOIN profiles       p ON p.id = q.created_by
+	LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current `
 
 func (s *store) list(ctx context.Context, orgID, status string, limit, offset int) ([]Quote, error) {
 	// A single statement with an optional filter: passing '' means "any status",
 	// which keeps one query plan instead of two code paths.
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+quoteColumns+quoteFrom+
-			`WHERE q.org_id = $1 AND ($2 = '' OR q.status = $2)
+			`WHERE q.deleted_at IS NULL AND ($1 = '' OR q.status = $1)
 			 ORDER BY q.created_at DESC, q.id
-			 LIMIT $3 OFFSET $4`, orgID, status, limit, offset)
+			 LIMIT $2 OFFSET $3`, status, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -127,14 +151,14 @@ func (s *store) list(ctx context.Context, orgID, status string, limit, offset in
 func (s *store) count(ctx context.Context, orgID, status string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM quotes WHERE org_id = $1 AND ($2 = '' OR status = $2)`,
-		orgID, status).Scan(&n)
+		`SELECT count(*) FROM quotes
+		  WHERE deleted_at IS NULL AND ($1 = '' OR status = $1)`, status).Scan(&n)
 	return n, err
 }
 
 func (s *store) get(ctx context.Context, orgID, id string) (Quote, error) {
 	q, err := scanQuote(s.pool.QueryRow(ctx,
-		`SELECT `+quoteColumns+quoteFrom+`WHERE q.org_id = $1 AND q.id = $2`, orgID, id))
+		`SELECT `+quoteColumns+quoteFrom+`WHERE q.id = $1 AND q.deleted_at IS NULL`, id))
 	if err != nil {
 		return Quote{}, err
 	}
@@ -177,26 +201,25 @@ func (s *store) create(ctx context.Context, orgID, currency string, in Input) (s
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Row lock on the organization for the duration of the transaction, so two
-	// concurrent creates can't take the same number.
-	var seq int
-	if err := tx.QueryRow(ctx,
-		`UPDATE organizations SET quote_seq = quote_seq + 1 WHERE id = $1 RETURNING quote_seq`,
-		orgID).Scan(&seq); err != nil {
-		return "", err
-	}
-	number := fmt.Sprintf("Q-%04d", seq)
-
+	// Title, contact and notes have no column in this schema and are dropped;
+	// the document number is derived from the id on read, so no counter is taken.
 	var id string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO quotes
-		   (org_id, number, title, currency, account_id, contact_id, deal_id,
-		    owner_user_id, notes, valid_until)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		   (deal_id, company_id, status, current_version, created_by, valid_until)
+		 VALUES ($1, $2, 'draft', 1,
+		         (SELECT id FROM profiles WHERE id = $3::uuid), $4)
 		 RETURNING id::text`,
-		orgID, number, in.Title, currency, in.AccountID, in.ContactID, in.DealID,
-		in.OwnerUserID, in.Notes, in.ValidUntil,
+		in.DealID, in.AccountID, in.OwnerUserID, in.ValidUntil,
 	).Scan(&id); err != nil {
+		return "", translate(err)
+	}
+
+	// The totals live on the version row, so a quote needs one from the start.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO quote_versions
+		   (quote_id, version_number, line_items, subtotal, tax, total, currency, is_current)
+		 VALUES ($1, 1, '[]'::jsonb, 0, 0, 0, $2, true)`, id, currency); err != nil {
 		return "", translate(err)
 	}
 
@@ -225,12 +248,10 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	var status string
 	err = tx.QueryRow(ctx,
 		`UPDATE quotes
-		 SET title = $3, account_id = $4, contact_id = $5, deal_id = $6,
-		     owner_user_id = $7, notes = $8, valid_until = $9, updated_at = now()
-		 WHERE org_id = $1 AND id = $2 AND status = 'draft'
+		 SET deal_id = $2, company_id = $3, valid_until = $4, updated_at = now()
+		 WHERE id = $1 AND status = 'draft'
 		 RETURNING status`,
-		orgID, id, in.Title, in.AccountID, in.ContactID, in.DealID,
-		in.OwnerUserID, in.Notes, in.ValidUntil).Scan(&status)
+		id, in.DealID, in.AccountID, in.ValidUntil).Scan(&status)
 
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return s.explainWriteMiss(ctx, orgID, id)
@@ -286,16 +307,15 @@ func recalculate(ctx context.Context, tx pgx.Tx, orgID, quoteID string) error {
 		     COALESCE(sum(round(quantity * unit_price, 2)), 0) AS gross,
 		     COALESCE(sum(line_total), 0)                      AS net,
 		     COALESCE(sum(round(line_total * tax_percent / 100, 2)), 0) AS tax
-		   FROM quote_items WHERE quote_id = $2
+		   FROM quote_items WHERE quote_id = $1
 		 )
-		 UPDATE quotes
+		 UPDATE quote_versions
 		 SET subtotal = t.gross,
-		     discount_total = t.gross - t.net,
-		     tax_total = t.tax,
-		     total = t.net + t.tax,
+		     tax      = t.tax,
+		     total    = t.net + t.tax,
 		     updated_at = now()
 		 FROM t
-		 WHERE quotes.org_id = $1 AND quotes.id = $2`, orgID, quoteID)
+		 WHERE quote_versions.quote_id = $1 AND quote_versions.is_current`, quoteID)
 	return err
 }
 
@@ -304,14 +324,12 @@ func (s *store) setStatus(ctx context.Context, orgID, id, from, to string) error
 	// `status = $3` makes the transition atomic against a concurrent change: the
 	// caller's view of the current status has to still be true.
 	tag, err := s.pool.Exec(ctx,
+		// There are no per-status timestamp columns in this schema, so a
+		// transition records the new status and updated_at only.
 		`UPDATE quotes
-		 SET status = $4,
-		     sent_at     = CASE WHEN $4 = 'sent'     THEN now() ELSE sent_at     END,
-		     accepted_at = CASE WHEN $4 = 'accepted' THEN now() ELSE accepted_at END,
-		     declined_at = CASE WHEN $4 = 'declined' THEN now() ELSE declined_at END,
-		     updated_at  = now()
-		 WHERE org_id = $1 AND id = $2 AND status = $3`,
-		orgID, id, from, to)
+		 SET status = $3, updated_at = now()
+		 WHERE id = $1 AND status = $2 AND deleted_at IS NULL`,
+		id, from, to)
 	if err != nil {
 		return translate(err)
 	}
@@ -325,7 +343,7 @@ func (s *store) setStatus(ctx context.Context, orgID, id, from, to string) error
 func (s *store) currentStatus(ctx context.Context, orgID, id string) (string, error) {
 	var status string
 	err := s.pool.QueryRow(ctx,
-		`SELECT status FROM quotes WHERE org_id = $1 AND id = $2`, orgID, id).Scan(&status)
+		`SELECT status FROM quotes WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return "", ErrNotFound
 	}
@@ -336,7 +354,7 @@ func (s *store) currentStatus(ctx context.Context, orgID, id string) (string, er
 // deleting one is refused rather than quietly rewriting history.
 func (s *store) delete(ctx context.Context, orgID, id string) error {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM quotes WHERE org_id = $1 AND id = $2 AND status = 'draft'`, orgID, id)
+		`DELETE FROM quotes WHERE id = $1 AND status = 'draft'`, id)
 	if err != nil {
 		return translate(err)
 	}
@@ -364,8 +382,7 @@ func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, er
 	// table is never user input — callers pass a literal.
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE org_id = $1 AND id = $2)`,
-		orgID, id).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return false, nil
@@ -384,8 +401,10 @@ type Stats struct {
 
 func (s *store) stats(ctx context.Context, orgID string) ([]Stats, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT status, count(*), COALESCE(sum(total), 0)::float8
-		 FROM quotes WHERE org_id = $1 GROUP BY status`, orgID)
+		`SELECT q.status, count(*), COALESCE(sum(v.total), 0)::float8
+		 FROM quotes q
+		 LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current
+		 WHERE q.deleted_at IS NULL GROUP BY q.status`)
 	if err != nil {
 		return nil, err
 	}

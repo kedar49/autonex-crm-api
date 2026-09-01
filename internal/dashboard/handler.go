@@ -105,7 +105,7 @@ func (h *Handler) build(ctx context.Context, orgID string) (Summary, error) {
 	for _, s := range leadStats {
 		counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Value}
 	}
-	sum.Leads = rollUp(leads.Stages, "converted", []string{"dropped"}, counts)
+	sum.Leads = rollUp(leads.Stages, "closed", []string{"not interested"}, counts)
 
 	dealStats, err := h.deals.Stats(ctx, orgID)
 	if err != nil {
@@ -125,18 +125,18 @@ func (h *Handler) build(ctx context.Context, orgID string) (Summary, error) {
 	for _, s := range quoteStats {
 		counts[s.Status] = StageSummary{Stage: s.Status, Count: s.Count, Value: s.Value}
 	}
-	sum.Quotes = rollUp(quotes.Statuses, "accepted", []string{"declined", "expired"}, counts)
+	sum.Quotes = rollUp(quotes.Statuses, "approved", []string{"rejected", "expired"}, counts)
 
 	if sum.Invoices, err = h.invoices.Stats(ctx, orgID); err != nil {
 		return Summary{}, err
 	}
 
 	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM contacts WHERE org_id = $1`, orgID).Scan(&sum.Contacts); err != nil {
+		`SELECT count(*) FROM contacts WHERE deleted_at IS NULL`).Scan(&sum.Contacts); err != nil {
 		return Summary{}, err
 	}
 	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM users WHERE org_id = $1`, orgID).Scan(&sum.Members); err != nil {
+		`SELECT count(*) FROM profiles`).Scan(&sum.Members); err != nil {
 		return Summary{}, err
 	}
 
