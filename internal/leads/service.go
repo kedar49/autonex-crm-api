@@ -12,14 +12,21 @@ import (
 
 // Stages is the lead lifecycle, per the redesign brief §3.2.
 //
-//	new → contacted → replied → call_booked → call_done → [converted | dropped]
+//	new → initial count → deck sent → call scheduled → call done → proposal sent
+//	    → [closed | not interested]
 //
 // Outreach only. A lead does not "close" — it hands off to a deal, which is why
 // "proposal sent" and "closed" live in the deal pipeline and not here.
-var Stages = []string{"new", "contacted", "replied", "call_booked", "call_done", "converted", "dropped"}
+// The vocabulary is the one the database enforces (leads_status_check), not
+// the one the original brief described — the rows in this deployment use
+// space-separated names and a different pipeline.
+var Stages = []string{
+	"new", "initial count", "deck sent", "call scheduled",
+	"call done", "proposal sent", "closed", "not interested",
+}
 
 // Terminal stages: work has finished, one way or the other.
-var terminal = map[string]bool{"converted": true, "dropped": true}
+var terminal = map[string]bool{"closed": true, "not interested": true}
 
 // Filters the list accepts beyond a plain stage name.
 const (
@@ -205,15 +212,19 @@ func ValidFilter(filter string) bool {
 func NextStage(stage string) string {
 	switch stage {
 	case "new":
-		return "contacted"
-	case "contacted":
-		return "replied"
-	case "replied":
-		return "call_booked"
-	case "call_booked":
-		return "call_done"
+		return "initial count"
+	case "initial count":
+		return "deck sent"
+	case "deck sent":
+		return "call scheduled"
+	case "call scheduled":
+		return "call done"
+	case "call done":
+		return "proposal sent"
+	case "proposal sent":
+		return "closed"
 	default:
-		// call_done hands off to the convert action; terminal stages have no next.
+		// Terminal stages have nowhere to go.
 		return ""
 	}
 }
