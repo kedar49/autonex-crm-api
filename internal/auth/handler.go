@@ -157,6 +157,12 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrEmailTaken):
 		redirectError("That email is already registered with a password account. Please log in with your email and password.")
 		return
+	case errors.Is(err, ErrDomainNotAllowed):
+		redirectError("Sign in with your work account. Only accounts on the company domain can use this app.")
+		return
+	case errors.Is(err, ErrOrgNotFound):
+		redirectError("Sign-in is misconfigured: the workspace new accounts join was not found. Contact an administrator.")
+		return
 	case err != nil:
 		redirectError("SSO authentication failed: " + err.Error())
 		return

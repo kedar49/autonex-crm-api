@@ -46,6 +46,23 @@ type Config struct {
 	// Only providers with a non-empty client id are considered enabled.
 	OAuthCreds map[string]OAuthCredentials
 
+	// SSOAllowedDomains restricts which email domains may sign in through SSO.
+	// Empty means no restriction, which is the historical behaviour.
+	//
+	// This is a second lock, not the first: an Internal consent screen already
+	// stops anyone outside the Workspace. It exists so that publishing the app
+	// externally, or pointing it at a different OAuth client, cannot quietly turn
+	// the CRM into an open sign-up.
+	SSOAllowedDomains []string
+
+	// SSODefaultOrgID is the organization a new SSO user joins. Empty keeps the
+	// old behaviour of giving each signup its own workspace.
+	//
+	// An id rather than a name: a workspace can be renamed from the settings
+	// screen, and a rename must not silently start scattering new colleagues into
+	// separate organizations again.
+	SSODefaultOrgID string
+
 	// SMTP settings for notification email. SMTPHost and SMTPFrom are what make
 	// mail live: with either missing, notifications are skipped rather than
 	// failing, so a deployment without a relay still works normally.
@@ -78,14 +95,16 @@ func Load() Config {
 		OIDCRedirectBase: getenv("OIDC_REDIRECT_BASE", "http://localhost:8080/api/v1/auth/sso"),
 		IntegrationsRedirectBase: getenv("INTEGRATIONS_REDIRECT_BASE",
 			"http://localhost:8080/api/v1/integrations"),
-		Timezone:     getenv("APP_TIMEZONE", "UTC"),
-		OAuthCreds:   loadOAuthCreds(),
-		SMTPHost:     getenv("SMTP_HOST", ""),
-		SMTPPort:     getint("SMTP_PORT", 587),
-		SMTPUser:     getenv("SMTP_USER", ""),
-		SMTPPassword: getenv("SMTP_PASSWORD", ""),
-		SMTPFrom:     getenv("SMTP_FROM", ""),
-		SMTPFromName: getenv("SMTP_FROM_NAME", "go-CRM"),
+		Timezone:          getenv("APP_TIMEZONE", "UTC"),
+		OAuthCreds:        loadOAuthCreds(),
+		SSOAllowedDomains: loadAllowedDomains(),
+		SSODefaultOrgID:   getenv("SSO_DEFAULT_ORG_ID", ""),
+		SMTPHost:          getenv("SMTP_HOST", ""),
+		SMTPPort:          getint("SMTP_PORT", 587),
+		SMTPUser:          getenv("SMTP_USER", ""),
+		SMTPPassword:      getenv("SMTP_PASSWORD", ""),
+		SMTPFrom:          getenv("SMTP_FROM", ""),
+		SMTPFromName:      getenv("SMTP_FROM_NAME", "go-CRM"),
 	}
 }
 
@@ -139,6 +158,25 @@ func loadOAuthCreds() map[string]OAuthCredentials {
 		}
 	}
 	return creds
+}
+
+// loadAllowedDomains parses SSO_ALLOWED_DOMAINS, a comma-separated list such as
+// "autonexai360.com". Values are lower-cased and stripped of a leading "@" so
+// either spelling works.
+func loadAllowedDomains() []string {
+	raw := os.Getenv("SSO_ALLOWED_DOMAINS")
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		d := strings.ToLower(strings.TrimSpace(part))
+		d = strings.TrimPrefix(d, "@")
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func getenv(key, fallback string) string {

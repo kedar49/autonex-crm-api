@@ -69,6 +69,60 @@ func (s *store) updateUserProviderID(ctx context.Context, userID, providerUserID
 // single transaction. users.org_id is NOT NULL and every CRM query is scoped by
 // it, so a user without an org could not reach any data — the two rows have to
 // be created atomically or not at all.
+// createUserInOrg adds a user to an organization that already exists, rather than
+// minting one for them.
+//
+// This is what puts colleagues who sign in with SSO into the same workspace. The
+// organization is verified inside the transaction: a configured id that does not
+// exist must fail the signup loudly, because the alternative — quietly falling
+// back to a personal workspace — is the exact fragmentation this prevents, and it
+// would be invisible until someone noticed the team page listing one person.
+func (s *store) createUserInOrg(ctx context.Context, orgID string, in newUser) (User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM organizations WHERE id = $1::uuid)`, orgID).
+		Scan(&exists); err != nil {
+		return User{}, err
+	}
+	if !exists {
+		return User{}, ErrOrgNotFound
+	}
+
+	u, err := scanUser(tx.QueryRow(ctx,
+		`INSERT INTO users (email, org_id, password_hash, auth_provider, provider_user_id, name)
+		 VALUES ($1, $2::uuid, $3, $4, $5, $6)
+		 RETURNING `+userColumns,
+		in.Email, orgID, in.PasswordHash, in.AuthProvider, in.ProviderUserID, in.Name))
+	if err != nil {
+		return User{}, err
+	}
+
+	fullName := in.Email
+	if in.Name != nil && *in.Name != "" {
+		fullName = *in.Name
+	}
+	// A joiner is not the owner of a workspace that already has one.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO profiles (id, full_name, role)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name`,
+		u.ID, fullName, "sales",
+	); err != nil {
+		return User{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, err
+	}
+	return u, nil
+}
+
 func (s *store) createUserWithOrg(ctx context.Context, in newUser) (User, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

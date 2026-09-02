@@ -19,6 +19,12 @@ var (
 	ErrEmailTaken = errors.New("email already registered")
 	// ErrUnknownProvider is returned for an unconfigured SSO provider.
 	ErrUnknownProvider = errors.New("unknown or unconfigured provider")
+	// ErrDomainNotAllowed is returned when an SSO identity's email domain is not
+	// on the allow-list.
+	ErrDomainNotAllowed = errors.New("that email domain is not allowed to sign in")
+	// ErrOrgNotFound means SSO_DEFAULT_ORG_ID names an organization that does not
+	// exist.
+	ErrOrgNotFound = errors.New("the configured sign-in workspace does not exist")
 )
 
 // Service holds the auth business logic.
@@ -133,6 +139,12 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (Sessi
 	}
 	id.Email = strings.TrimSpace(strings.ToLower(id.Email))
 
+	// Checked before any lookup or provisioning: an address from outside the
+	// allowed domains must not create an account, nor reveal whether one exists.
+	if !domainAllowed(s.cfg.SSOAllowedDomains, id.Email) {
+		return Session{}, ErrDomainNotAllowed
+	}
+
 	// 1. Known SSO identity → log in.
 	u, err := s.store.userByProvider(ctx, provider, id.ProviderUserID)
 	if err == nil {
@@ -155,20 +167,49 @@ func (s *Service) CompleteSSO(ctx context.Context, provider, code string) (Sessi
 		return Session{}, e
 	}
 
-	// 3. First time → provision a new SSO user with their own workspace.
+	// 3. First time → provision the user. With SSO_DEFAULT_ORG_ID set they join
+	//    that workspace, so colleagues signing in with SSO land together instead
+	//    of each getting their own.
 	var namePtr *string
 	if id.Name != "" {
 		namePtr = &id.Name
 	}
-	u, err = s.store.createUserWithOrg(ctx, newUser{
+	joining := newUser{
 		Email:          id.Email,
 		Name:           namePtr,
 		OrgName:        defaultOrgName(id.Email),
 		AuthProvider:   provider,
 		ProviderUserID: &id.ProviderUserID,
-	})
+	}
+	if s.cfg.SSODefaultOrgID != "" {
+		u, err = s.store.createUserInOrg(ctx, s.cfg.SSODefaultOrgID, joining)
+	} else {
+		u, err = s.store.createUserWithOrg(ctx, joining)
+	}
 	if err != nil {
 		return Session{}, err
 	}
 	return IssueSession(ctx, s.pool, s.cfg, u)
+}
+
+// domainAllowed reports whether an email may sign in through SSO.
+//
+// An empty allow-list permits everything, so a deployment that has not set
+// SSO_ALLOWED_DOMAINS behaves exactly as before. Matching is on the part after
+// the last "@", lower-cased by the caller.
+func domainAllowed(allowed []string, email string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 {
+		return false
+	}
+	domain := email[at+1:]
+	for _, d := range allowed {
+		if domain == d {
+			return true
+		}
+	}
+	return false
 }
