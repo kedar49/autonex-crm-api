@@ -219,6 +219,21 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 }
 
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
+	if table == "accounts" {
+		table = "companies"
+	}
+	if table == "users" || table == "profiles" {
+		var exists bool
+		err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) OR EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, id).Scan(&exists)
+		if err != nil {
+			if isPgCode(err, pgInvalidTextRepr) {
+				return false, nil
+			}
+			return false, err
+		}
+		return exists, nil
+	}
 	var exists bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)

@@ -178,7 +178,21 @@ func (s *store) move(ctx context.Context, orgID, id, stage string, index int) (D
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
 // existence is the only thing left to verify.
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
-	// table is never user input — callers pass a literal.
+	if table == "accounts" {
+		table = "companies"
+	}
+	if table == "users" || table == "profiles" {
+		var exists bool
+		err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) OR EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, id).Scan(&exists)
+		if err != nil {
+			if isPgCode(err, pgInvalidTextRepr) {
+				return false, nil
+			}
+			return false, err
+		}
+		return exists, nil
+	}
 	var exists bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)

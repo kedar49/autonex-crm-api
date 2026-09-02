@@ -379,7 +379,21 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 
 // refInOrg checks a client-supplied foreign key against the caller's org.
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
-	// table is never user input — callers pass a literal.
+	if table == "accounts" {
+		table = "companies"
+	}
+	if table == "users" {
+		var exists bool
+		err := s.pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) OR EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, id).Scan(&exists)
+		if err != nil {
+			if isPgCode(err, pgInvalidTextRepr) {
+				return false, nil
+			}
+			return false, err
+		}
+		return exists, nil
+	}
 	var exists bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)

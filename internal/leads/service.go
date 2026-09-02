@@ -265,7 +265,7 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 		id    *string
 	}{
 		{"users", in.OwnerUserID},
-		{"accounts", in.AccountID},
+		{"companies", in.AccountID},
 		{"contacts", in.ContactID},
 	} {
 		if ref.id == nil {
