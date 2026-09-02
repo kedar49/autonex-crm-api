@@ -142,8 +142,8 @@ func SetRefreshCookie(w http.ResponseWriter, cfg config.Config, raw string, expi
 		Expires:  expiresAt,
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode,
+		Secure:   secureCookies(cfg),
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -155,8 +155,8 @@ func ClearRefreshCookie(w http.ResponseWriter, cfg config.Config) {
 		Path:     refreshCookiePath,
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteNoneMode,
+		Secure:   secureCookies(cfg),
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
