@@ -108,42 +108,76 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
+// This deployment's invoices table stores one money column, amount_due, and no
+// title, notes, issue date or lifecycle timestamps. amount_due is therefore the
+// invoice total; the subtotal and tax are derived from the line items, and the
+// amount paid from settled payments. Everything else is a typed NULL holding its
+// scan position, so the Go model and the JSON contract are unchanged.
+//
+// `paid` is a LATERAL rather than three correlated subqueries: the paid figure
+// feeds the balance and the overdue flag as well, and computing it once keeps
+// those three in agreement by construction.
 const invoiceColumns = `
-	i.id::text, i.number, i.title, i.status, i.currency,
-	i.quote_id::text, q.number,
-	i.account_id::text, a.name,
-	i.contact_id::text, NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
-	i.deal_id::text, d.title,
-	i.owner_user_id::text, u.name, u.email,
-	i.notes, i.issue_date, i.due_date,
-	i.subtotal::float8, i.discount_total::float8, i.tax_total::float8,
-	i.total::float8, i.amount_paid::float8,
-	(i.total - i.amount_paid)::float8,
+	i.id::text,
+	i.invoice_number                   AS number,
+	NULL::text                         AS title,
+	i.status, i.currency,
+	i.quote_id::text,
+	'Q-' || upper(substr(i.quote_id::text, 1, 8)) AS quote_number,
+	i.company_id::text                 AS account_id,
+	a.name                             AS account_name,
+	NULL::text                         AS contact_id,
+	NULL::text                         AS contact_name,
+	q.deal_id::text                    AS deal_id,
+	d.title                            AS deal_title,
+	i.account_manager_id::text         AS owner_user_id,
+	p.full_name                        AS owner_name,
+	NULL::text                         AS owner_email,
+	NULL::text                         AS notes,
+	NULL::date                         AS issue_date,
+	i.due_date,
+	COALESCE(items.gross, 0)::float8   AS subtotal,
+	0::float8                          AS discount_total,
+	COALESCE(items.tax, 0)::float8     AS tax_total,
+	i.amount_due::float8               AS total,
+	paid.amt::float8                   AS amount_paid,
+	(i.amount_due - paid.amt)::float8  AS balance,
 	(i.status = 'sent' AND i.due_date IS NOT NULL
-	   AND i.due_date < CURRENT_DATE AND i.total > i.amount_paid),
-	i.sent_at, i.paid_at, i.voided_at, i.created_at, i.updated_at,
+	   AND i.due_date < CURRENT_DATE AND i.amount_due > paid.amt),
+	NULL::timestamptz                  AS sent_at,
+	paid.at                            AS paid_at,
+	NULL::timestamptz                  AS voided_at,
+	i.created_at, i.updated_at,
 	(SELECT count(*) FROM invoice_items it WHERE it.invoice_id = i.id)`
 
 const invoiceFrom = `
 	FROM invoices i
-	LEFT JOIN quotes   q ON q.id = i.quote_id
-	LEFT JOIN accounts a ON a.id = i.account_id
-	LEFT JOIN contacts c ON c.id = i.contact_id
-	LEFT JOIN deals    d ON d.id = i.deal_id
-	LEFT JOIN users    u ON u.id = i.owner_user_id `
+	LEFT JOIN quotes    q ON q.id = i.quote_id
+	LEFT JOIN companies a ON a.id = i.company_id
+	LEFT JOIN deals     d ON d.id = q.deal_id
+	LEFT JOIN profiles  p ON p.id = i.account_manager_id
+	CROSS JOIN LATERAL (
+	  SELECT COALESCE(sum(amount), 0) AS amt, max(paid_at) AS at
+	    FROM payments pm WHERE pm.invoice_id = i.id AND pm.status = 'succeeded'
+	) paid
+	CROSS JOIN LATERAL (
+	  SELECT COALESCE(sum(round(quantity * unit_price, 2)), 0) AS gross,
+	         COALESCE(sum(round(line_total * tax_percent / 100, 2)), 0) AS tax
+	    FROM invoice_items ii WHERE ii.invoice_id = i.id
+	) items `
 
 func (s *store) list(ctx context.Context, orgID, status string, limit, offset int) ([]Invoice, error) {
 	// 'overdue' is a view over sent invoices, not a stored status, so it is
 	// filtered here rather than compared against the status column.
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+invoiceColumns+invoiceFrom+
-			`WHERE i.org_id = $1
-			   AND ($2 = '' OR ($2 <> 'overdue' AND i.status = $2)
-			        OR ($2 = 'overdue' AND i.status = 'sent'
+			`WHERE i.deleted_at IS NULL
+			   AND ($1 = '' OR ($1 <> 'overdue' AND i.status = $1)
+			        OR ($1 = 'overdue' AND i.status = 'sent'
 			            AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
-			            AND i.total > i.amount_paid))
+			            AND i.amount_due > paid.amt))
 			 ORDER BY i.created_at DESC, i.id
-			 LIMIT $3 OFFSET $4`, orgID, status, limit, offset)
+			 LIMIT $2 OFFSET $3`, status, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -164,17 +198,21 @@ func (s *store) count(ctx context.Context, orgID, status string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM invoices i
-		 WHERE i.org_id = $1
-		   AND ($2 = '' OR ($2 <> 'overdue' AND i.status = $2)
-		        OR ($2 = 'overdue' AND i.status = 'sent'
+		 CROSS JOIN LATERAL (
+		   SELECT COALESCE(sum(amount), 0) AS amt
+		     FROM payments pm WHERE pm.invoice_id = i.id AND pm.status = 'succeeded'
+		 ) paid
+		 WHERE i.deleted_at IS NULL
+		   AND ($1 = '' OR ($1 <> 'overdue' AND i.status = $1)
+		        OR ($1 = 'overdue' AND i.status = 'sent'
 		            AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
-		            AND i.total > i.amount_paid))`, orgID, status).Scan(&n)
+		            AND i.amount_due > paid.amt))`, status).Scan(&n)
 	return n, err
 }
 
 func (s *store) get(ctx context.Context, orgID, id string) (Invoice, error) {
 	inv, err := scanInvoice(s.pool.QueryRow(ctx,
-		`SELECT `+invoiceColumns+invoiceFrom+`WHERE i.org_id = $1 AND i.id = $2`, orgID, id))
+		`SELECT `+invoiceColumns+invoiceFrom+`WHERE i.id = $1 AND i.deleted_at IS NULL`, id))
 	if err != nil {
 		return Invoice{}, err
 	}
@@ -212,8 +250,11 @@ func (s *store) items(ctx context.Context, invoiceID string) ([]Item, error) {
 
 func (s *store) payments(ctx context.Context, invoiceID string) ([]Payment, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, amount::float8, paid_on, method, reference, note, created_at
-		 FROM payments WHERE invoice_id = $1 ORDER BY paid_on DESC, created_at DESC`, invoiceID)
+		// No method or note column here; the provider reference stands in for the
+		// reference field, and paid_at carries the date.
+		`SELECT id::text, amount::float8, paid_at::date, NULL::text,
+		        stripe_payment_intent_id, NULL::text, created_at
+		 FROM payments WHERE invoice_id = $1 ORDER BY paid_at DESC, created_at DESC`, invoiceID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,13 +298,15 @@ func (s *store) create(ctx context.Context, orgID, currency string, in Input) (s
 
 	var id string
 	if err := tx.QueryRow(ctx,
+		// Title, notes, contact, deal and issue date have no column here and are
+		// dropped; the deal is reached through the originating quote instead.
 		`INSERT INTO invoices
-		   (org_id, number, title, currency, account_id, contact_id, deal_id,
-		    owner_user_id, notes, issue_date, due_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		   (invoice_number, status, currency, company_id, account_manager_id,
+		    due_date, amount_due)
+		 VALUES ($1, 'draft', $2, $3,
+		         (SELECT id FROM profiles WHERE id = $4::uuid), $5, 0)
 		 RETURNING id::text`,
-		orgID, number, in.Title, currency, in.AccountID, in.ContactID, in.DealID,
-		in.OwnerUserID, in.Notes, in.IssueDate, in.DueDate,
+		number, currency, in.AccountID, in.OwnerUserID, in.DueDate,
 	).Scan(&id); err != nil {
 		return "", translate(err)
 	}
@@ -292,13 +335,12 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	var status string
 	err = tx.QueryRow(ctx,
 		`UPDATE invoices
-		 SET title = $3, account_id = $4, contact_id = $5, deal_id = $6,
-		     owner_user_id = $7, notes = $8, issue_date = $9, due_date = $10,
-		     updated_at = now()
-		 WHERE org_id = $1 AND id = $2 AND status = 'draft'
+		 SET company_id = $2,
+		     account_manager_id = (SELECT id FROM profiles WHERE id = $3::uuid),
+		     due_date = $4, updated_at = now()
+		 WHERE id = $1 AND status = 'draft' AND deleted_at IS NULL
 		 RETURNING status`,
-		orgID, id, in.Title, in.AccountID, in.ContactID, in.DealID,
-		in.OwnerUserID, in.Notes, in.IssueDate, in.DueDate).Scan(&status)
+		id, in.AccountID, in.OwnerUserID, in.DueDate).Scan(&status)
 
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return s.explainWriteMiss(ctx, orgID, id)
@@ -349,19 +391,13 @@ func recalculate(ctx context.Context, tx pgx.Tx, orgID, invoiceID string) error 
 		     COALESCE(sum(round(quantity * unit_price, 2)), 0) AS gross,
 		     COALESCE(sum(line_total), 0)                      AS net,
 		     COALESCE(sum(round(line_total * tax_percent / 100, 2)), 0) AS tax
-		   FROM invoice_items WHERE invoice_id = $2
-		 ), p AS (
-		   SELECT COALESCE(sum(amount), 0) AS paid FROM payments WHERE invoice_id = $2
+		   FROM invoice_items WHERE invoice_id = $1
 		 )
 		 UPDATE invoices
-		 SET subtotal = t.gross,
-		     discount_total = t.gross - t.net,
-		     tax_total = t.tax,
-		     total = t.net + t.tax,
-		     amount_paid = p.paid,
+		 SET amount_due = t.net + t.tax,
 		     updated_at = now()
-		 FROM t, p
-		 WHERE invoices.org_id = $1 AND invoices.id = $2`, orgID, invoiceID)
+		 FROM t
+		 WHERE invoices.id = $1`, invoiceID)
 	return err
 }
 
@@ -377,8 +413,8 @@ func (s *store) addPayment(ctx context.Context, orgID, invoiceID string, in Paym
 	// lock so it can't race a void.
 	var status string
 	err = tx.QueryRow(ctx,
-		`SELECT status FROM invoices WHERE org_id = $1 AND id = $2 FOR UPDATE`,
-		orgID, invoiceID).Scan(&status)
+		`SELECT status FROM invoices WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		invoiceID).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return ErrNotFound
 	}
@@ -390,9 +426,14 @@ func (s *store) addPayment(ctx context.Context, orgID, invoiceID string, in Paym
 	}
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO payments (invoice_id, org_id, amount, paid_on, method, reference, note)
-		 VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7)`,
-		invoiceID, orgID, in.Amount, in.PaidOn, in.Method, in.Reference, in.Note); err != nil {
+		// Method and note have no column here. A payment recorded by hand is
+		// settled by definition, so it goes straight in as succeeded.
+		`INSERT INTO payments (invoice_id, amount, currency, status, paid_at,
+		                       stripe_payment_intent_id)
+		 VALUES ($1, $2,
+		         (SELECT currency FROM invoices WHERE id = $1),
+		         'succeeded', COALESCE($3::timestamptz, now()), $4)`,
+		invoiceID, in.Amount, in.PaidOn, in.Reference); err != nil {
 		return translate(err)
 	}
 
@@ -403,10 +444,12 @@ func (s *store) addPayment(ctx context.Context, orgID, invoiceID string, in Paym
 	// Settle automatically once the balance is covered — making someone click
 	// "mark paid" after entering the final payment is busywork the system can do.
 	if _, err := tx.Exec(ctx,
-		`UPDATE invoices
-		 SET status = 'paid', paid_at = COALESCE(paid_at, now()), updated_at = now()
-		 WHERE org_id = $1 AND id = $2 AND status = 'sent' AND amount_paid >= total`,
-		orgID, invoiceID); err != nil {
+		`UPDATE invoices i
+		 SET status = 'paid', updated_at = now()
+		 WHERE i.id = $1 AND i.status = 'sent'
+		   AND (SELECT COALESCE(sum(amount), 0) FROM payments pm
+		         WHERE pm.invoice_id = i.id AND pm.status = 'succeeded') >= i.amount_due`,
+		invoiceID); err != nil {
 		return err
 	}
 
@@ -416,15 +459,12 @@ func (s *store) addPayment(ctx context.Context, orgID, invoiceID string, in Paym
 // setStatus applies a lifecycle transition and stamps the matching timestamp.
 func (s *store) setStatus(ctx context.Context, orgID, id, from, to string) error {
 	tag, err := s.pool.Exec(ctx,
+		// No per-status timestamp columns in this schema, so a transition records
+		// the new status and updated_at only.
 		`UPDATE invoices
-		 SET status = $4,
-		     sent_at   = CASE WHEN $4 = 'sent' THEN COALESCE(sent_at, now()) ELSE sent_at END,
-		     issue_date = CASE WHEN $4 = 'sent' THEN COALESCE(issue_date, CURRENT_DATE) ELSE issue_date END,
-		     paid_at   = CASE WHEN $4 = 'paid' THEN now() ELSE paid_at END,
-		     voided_at = CASE WHEN $4 = 'void' THEN now() ELSE voided_at END,
-		     updated_at = now()
-		 WHERE org_id = $1 AND id = $2 AND status = $3`,
-		orgID, id, from, to)
+		 SET status = $3, updated_at = now()
+		 WHERE id = $1 AND status = $2 AND deleted_at IS NULL`,
+		id, from, to)
 	if err != nil {
 		return translate(err)
 	}
@@ -437,7 +477,7 @@ func (s *store) setStatus(ctx context.Context, orgID, id, from, to string) error
 func (s *store) currentStatus(ctx context.Context, orgID, id string) (string, error) {
 	var status string
 	err := s.pool.QueryRow(ctx,
-		`SELECT status FROM invoices WHERE org_id = $1 AND id = $2`, orgID, id).Scan(&status)
+		`SELECT status FROM invoices WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return "", ErrNotFound
 	}
@@ -448,7 +488,7 @@ func (s *store) currentStatus(ctx context.Context, orgID, id string) (string, er
 // number has been given to a customer.
 func (s *store) delete(ctx context.Context, orgID, id string) error {
 	tag, err := s.pool.Exec(ctx,
-		`DELETE FROM invoices WHERE org_id = $1 AND id = $2 AND status = 'draft'`, orgID, id)
+		`DELETE FROM invoices WHERE id = $1 AND status = 'draft'`, id)
 	if err != nil {
 		return translate(err)
 	}
@@ -472,8 +512,7 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE org_id = $1 AND id = $2)`,
-		orgID, id).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return false, nil
@@ -496,12 +535,17 @@ func (s *store) stats(ctx context.Context, orgID string) (Stats, error) {
 	err := s.pool.QueryRow(ctx,
 		`SELECT
 		   count(*),
-		   COALESCE(sum(total - amount_paid) FILTER (WHERE status = 'sent'), 0)::float8,
-		   COALESCE(sum(total - amount_paid) FILTER (
-		     WHERE status = 'sent' AND due_date IS NOT NULL AND due_date < CURRENT_DATE
+		   COALESCE(sum(i.amount_due - paid.amt) FILTER (WHERE i.status = 'sent'), 0)::float8,
+		   COALESCE(sum(i.amount_due - paid.amt) FILTER (
+		     WHERE i.status = 'sent' AND i.due_date IS NOT NULL AND i.due_date < CURRENT_DATE
 		   ), 0)::float8,
-		   COALESCE(sum(amount_paid) FILTER (WHERE status <> 'void'), 0)::float8
-		 FROM invoices WHERE org_id = $1`, orgID,
+		   COALESCE(sum(paid.amt) FILTER (WHERE i.status <> 'void'), 0)::float8
+		 FROM invoices i
+		 CROSS JOIN LATERAL (
+		   SELECT COALESCE(sum(amount), 0) AS amt
+		     FROM payments pm WHERE pm.invoice_id = i.id AND pm.status = 'succeeded'
+		 ) paid
+		 WHERE i.deleted_at IS NULL`,
 	).Scan(&st.Total, &st.Outstanding, &st.Overdue, &st.Paid)
 	return st, err
 }

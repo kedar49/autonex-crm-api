@@ -11,10 +11,9 @@ import (
 )
 
 var (
-	// ErrNotFound means no lead with that id exists in the caller's org. A lead
-	// belonging to another tenant is indistinguishable from a missing one.
+	// ErrNotFound means no lead with that id exists.
 	ErrNotFound = errors.New("lead not found")
-	// ErrRefNotFound means a referenced owner, contact or company isn't in the org.
+	// ErrRefNotFound means a referenced owner, contact or company doesn't exist.
 	ErrRefNotFound = errors.New("referenced record is not in this organization")
 )
 
@@ -72,28 +71,51 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
+// This deployment's leads table stores a lead's identity and progress in
+// contact_name / job_title / status / value_estimate / next_follow_up_date, and
+// links a company rather than an account. leadColumns maps those onto the same
+// 28 scan positions scanLead has always read, so the Go model, the JSON contract
+// and the frontend stay untouched — the translation lives in SQL, in one place,
+// instead of spreading through the module.
+//
+// Columns with no counterpart in this database (last name, the account link, the
+// conversion trail) are selected as typed NULLs to hold their position.
 const leadColumns = `
-	l.id::text, l.first_name, l.last_name, l.title, l.email, l.phone,
-	l.linkedin_url, l.source, l.notes, l.value, l.stage,
-	l.account_id::text, a.name, a.industry, l.company,
+	l.id::text,
+	COALESCE(l.contact_name, '')       AS first_name,
+	NULL::text                         AS last_name,
+	l.job_title                        AS title,
+	l.email, l.phone, l.linkedin_url, l.source, l.notes,
+	l.value_estimate                   AS value,
+	l.status                           AS stage,
+	NULL::text                         AS account_id,
+	c.name                             AS account_name,
+	c.industry                         AS account_industry,
+	c.name                             AS company,
 	l.contact_id::text,
-	l.owner_user_id::text, u.name, u.email,
-	l.follow_up_at,
+	l.assigned_to::text                AS owner_user_id,
+	p.full_name                        AS owner_name,
+	NULL::text                         AS owner_email,
+	l.next_follow_up_date::timestamptz AS follow_up_at,
 	-- COALESCE is load-bearing, not defensive: a lead with no follow-up date
 	-- compares NULL, not false, and pgx cannot scan that into a bool.
-	COALESCE(l.follow_up_at < CURRENT_DATE
-	   AND l.stage NOT IN ('converted','dropped'), false),
-	COALESCE(l.follow_up_at = CURRENT_DATE
-	   AND l.stage NOT IN ('converted','dropped'), false),
+	COALESCE(l.next_follow_up_date < CURRENT_DATE
+	   AND l.status NOT IN ('closed','not interested'), false),
+	COALESCE(l.next_follow_up_date = CURRENT_DATE
+	   AND l.status NOT IN ('closed','not interested'), false),
+	-- Activities are polymorphic here (entity_type/entity_id), not a lead_id FK.
 	(SELECT max(act.occurred_at) FROM activities act
-	  WHERE act.lead_id = l.id AND act.kind <> 'system'),
-	l.converted_at, l.converted_deal_id::text, l.converted_contact_id::text,
+	  WHERE act.entity_type = 'lead' AND act.entity_id = l.id
+	    AND act.type <> 'system'),
+	NULL::timestamptz                  AS converted_at,
+	NULL::text                         AS converted_deal_id,
+	NULL::text                         AS converted_contact_id,
 	l.created_at, l.updated_at`
 
 const leadFrom = `
 	FROM leads l
-	LEFT JOIN accounts a ON a.id = l.account_id
-	LEFT JOIN users    u ON u.id = l.owner_user_id `
+	LEFT JOIN companies c ON c.id = l.company_id
+	LEFT JOIN profiles  p ON p.id = l.assigned_to `
 
 // urgencyOrder is the brief's "default sort by urgency": anything with a due
 // date first (oldest, so overdue leads lead), then unscheduled work, then the
@@ -101,31 +123,35 @@ const leadFrom = `
 const urgencyOrder = `
 	ORDER BY
 	  CASE
-	    WHEN l.stage IN ('converted','dropped') THEN 2
-	    WHEN l.follow_up_at IS NULL             THEN 1
+	    WHEN l.status IN ('closed','not interested') THEN 2
+	    WHEN l.next_follow_up_date IS NULL       THEN 1
 	    ELSE 0
 	  END,
-	  l.follow_up_at ASC NULLS LAST,
+	  l.next_follow_up_date ASC NULLS LAST,
 	  l.created_at DESC, l.id`
 
 // filterClause narrows the list. `overdue` and `due_today` are views over the
-// follow-up date rather than stages, so they can't be compared to the stage
-// column; everything else is a plain stage match.
+// follow-up date rather than stages, so they can't be compared to the status
+// column; everything else is a plain status match.
+//
+// This deployment is single-tenant: lead rows carry no organization link, so
+// there is no org predicate to apply. Rows soft-deleted through deleted_at are
+// excluded here and in every other read below.
 const filterClause = `
-	WHERE l.org_id = $1
-	  AND ($2 = '' OR
-	       ($2 = 'overdue'   AND l.follow_up_at IS NOT NULL
-	                         AND l.follow_up_at < CURRENT_DATE
-	                         AND l.stage NOT IN ('converted','dropped')) OR
-	       ($2 = 'due_today' AND l.follow_up_at = CURRENT_DATE
-	                         AND l.stage NOT IN ('converted','dropped')) OR
-	       ($2 = 'open'      AND l.stage NOT IN ('converted','dropped')) OR
-	       ($2 NOT IN ('overdue','due_today','open') AND l.stage = $2))`
+	WHERE l.deleted_at IS NULL
+	  AND ($1 = '' OR
+	       ($1 = 'overdue'   AND l.next_follow_up_date IS NOT NULL
+	                         AND l.next_follow_up_date < CURRENT_DATE
+	                         AND l.status NOT IN ('closed','not interested')) OR
+	       ($1 = 'due_today' AND l.next_follow_up_date = CURRENT_DATE
+	                         AND l.status NOT IN ('closed','not interested')) OR
+	       ($1 = 'open'      AND l.status NOT IN ('closed','not interested')) OR
+	       ($1 NOT IN ('overdue','due_today','open') AND l.status = $1))`
 
 func (s *store) list(ctx context.Context, orgID, filter string, limit, offset int) ([]Lead, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+leadColumns+leadFrom+filterClause+urgencyOrder+`
-		 LIMIT $3 OFFSET $4`, orgID, filter, limit, offset)
+		 LIMIT $2 OFFSET $3`, filter, limit, offset)
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -145,22 +171,23 @@ func (s *store) list(ctx context.Context, orgID, filter string, limit, offset in
 func (s *store) count(ctx context.Context, orgID, filter string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM leads l `+filterClause, orgID, filter).Scan(&n)
+		`SELECT count(*) FROM leads l `+filterClause, filter).Scan(&n)
 	return n, err
 }
 
 // counts powers the funnel strip and the filter pills in one round-trip.
 func (s *store) counts(ctx context.Context, orgID string) (map[string]int, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT stage, count(*) FROM leads WHERE org_id = $1 GROUP BY stage
+		`SELECT status, count(*) FROM leads WHERE deleted_at IS NULL GROUP BY status
 		 UNION ALL
 		 SELECT 'overdue', count(*) FROM leads
-		   WHERE org_id = $1 AND follow_up_at IS NOT NULL AND follow_up_at < CURRENT_DATE
-		     AND stage NOT IN ('converted','dropped')
+		   WHERE deleted_at IS NULL AND next_follow_up_date IS NOT NULL
+		     AND next_follow_up_date < CURRENT_DATE
+		     AND status NOT IN ('closed','not interested')
 		 UNION ALL
 		 SELECT 'due_today', count(*) FROM leads
-		   WHERE org_id = $1 AND follow_up_at = CURRENT_DATE
-		     AND stage NOT IN ('converted','dropped')`, orgID)
+		   WHERE deleted_at IS NULL AND next_follow_up_date = CURRENT_DATE
+		     AND status NOT IN ('closed','not interested')`)
 	if err != nil {
 		return nil, err
 	}
@@ -180,21 +207,23 @@ func (s *store) counts(ctx context.Context, orgID string) (map[string]int, error
 
 func (s *store) get(ctx context.Context, orgID, id string) (Lead, error) {
 	return scanLead(s.pool.QueryRow(ctx,
-		`SELECT `+leadColumns+leadFrom+`WHERE l.org_id = $1 AND l.id = $2`, orgID, id))
+		`SELECT `+leadColumns+leadFrom+`WHERE l.id = $1 AND l.deleted_at IS NULL`, id))
 }
 
+// create writes the fields this database has a home for. Last name, the
+// free-text company and the account link have no column here — the schema models
+// a lead's company through company_id — so the API still accepts them and they
+// are dropped, rather than failing the insert on a column that doesn't exist.
 func (s *store) create(ctx context.Context, orgID string, in Input) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO leads
-		   (org_id, first_name, last_name, title, email, phone, linkedin_url,
-		    company, account_id, contact_id, source, notes, value, stage,
-		    owner_user_id, follow_up_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		   (contact_name, job_title, email, phone, linkedin_url, contact_id,
+		    source, notes, value_estimate, status, assigned_to, next_follow_up_date)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::date)
 		 RETURNING id::text`,
-		orgID, in.FirstName, in.LastName, in.Title, in.Email, in.Phone, in.LinkedIn,
-		in.Company, in.AccountID, in.ContactID, in.Source, in.Notes, in.Value, in.Stage,
-		in.OwnerUserID, in.FollowUpAt,
+		in.FirstName, in.Title, in.Email, in.Phone, in.LinkedIn, in.ContactID,
+		in.Source, in.Notes, in.Value, in.Stage, in.OwnerUserID, in.FollowUpAt,
 	).Scan(&id)
 	return id, translate(err)
 }
@@ -202,14 +231,14 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (string, err
 func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
-		 SET first_name = $3, last_name = $4, title = $5, email = $6, phone = $7,
-		     linkedin_url = $8, company = $9, account_id = $10, contact_id = $11,
-		     source = $12, notes = $13, value = $14, stage = $15,
-		     owner_user_id = $16, follow_up_at = $17, updated_at = now()
-		 WHERE org_id = $1 AND id = $2`,
-		orgID, id, in.FirstName, in.LastName, in.Title, in.Email, in.Phone,
-		in.LinkedIn, in.Company, in.AccountID, in.ContactID, in.Source, in.Notes,
-		in.Value, in.Stage, in.OwnerUserID, in.FollowUpAt)
+		 SET contact_name = $2, job_title = $3, email = $4, phone = $5,
+		     linkedin_url = $6, contact_id = $7, source = $8, notes = $9,
+		     value_estimate = $10, status = $11, assigned_to = $12,
+		     next_follow_up_date = $13::date, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id, in.FirstName, in.Title, in.Email, in.Phone, in.LinkedIn,
+		in.ContactID, in.Source, in.Notes, in.Value, in.Stage,
+		in.OwnerUserID, in.FollowUpAt)
 	if err != nil {
 		return translate(err)
 	}
@@ -231,15 +260,15 @@ func (s *store) advance(
 ) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
-		 SET stage = $3,
-		     follow_up_at = CASE
-		       WHEN $5 THEN NULL
-		       WHEN $4::date IS NOT NULL THEN $4::date
-		       ELSE follow_up_at
+		 SET status = $2,
+		     next_follow_up_date = CASE
+		       WHEN $4 THEN NULL
+		       WHEN $3::date IS NOT NULL THEN $3::date
+		       ELSE next_follow_up_date
 		     END,
 		     updated_at = now()
-		 WHERE org_id = $1 AND id = $2 AND converted_at IS NULL`,
-		orgID, id, stage, followUp, clearFollowUp)
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id, stage, followUp, clearFollowUp)
 	if err != nil {
 		return translate(err)
 	}
@@ -250,7 +279,7 @@ func (s *store) advance(
 }
 
 func (s *store) delete(ctx context.Context, orgID, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM leads WHERE org_id = $1 AND id = $2`, orgID, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM leads WHERE id = $1`, id)
 	if err != nil {
 		return translate(err)
 	}
@@ -260,29 +289,28 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 	return nil
 }
 
-// explainWriteMiss tells "no such lead" apart from "already converted".
+// explainWriteMiss reports why an update matched no row. This schema keeps no
+// conversion trail, so a miss can only mean the lead is absent or soft-deleted.
 func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
-	var convertedAt *time.Time
+	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT converted_at FROM leads WHERE org_id = $1 AND id = $2`, orgID, id).Scan(&convertedAt)
+		`SELECT EXISTS (SELECT 1 FROM leads WHERE id = $1)`, id).Scan(&exists)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
 		return ErrNotFound
 	case err != nil:
 		return err
-	case convertedAt != nil:
-		return ErrAlreadyConverted
 	default:
 		return ErrNotFound
 	}
 }
 
-// refInOrg checks a client-supplied foreign key against the caller's org.
+// refInOrg checks a client-supplied foreign key. Single-tenant here, so
+// existence is the only thing left to verify.
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE org_id = $1 AND id = $2)`,
-		orgID, id).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return false, nil
@@ -301,8 +329,8 @@ type Stats struct {
 
 func (s *store) stats(ctx context.Context, orgID string) ([]Stats, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT stage, count(*), COALESCE(sum(value), 0)::float8
-		 FROM leads WHERE org_id = $1 GROUP BY stage`, orgID)
+		`SELECT status, count(*), COALESCE(sum(value_estimate), 0)::float8
+		 FROM leads WHERE deleted_at IS NULL GROUP BY status`)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +377,7 @@ func translate(err error) error {
 	case isPgCode(err, pgForeignKeyViolation):
 		return ErrRefNotFound
 	case isPgCode(err, pgCheckViolation):
-		// Only the stage CHECK can fire; the service validates stages first.
+		// Only the status CHECK can fire; the service validates stages first.
 		return ErrNotFound
 	default:
 		return err

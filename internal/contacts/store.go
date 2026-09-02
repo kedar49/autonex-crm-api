@@ -49,15 +49,17 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
-const contactColumns = `id::text, first_name, last_name, email, phone, account_id::text, created_at`
+// A contact's company is company_id in this schema; it is aliased to the
+// account_id position so the scan order and JSON contract are unchanged.
+const contactColumns = `id::text, first_name, last_name, email, phone, company_id::text, created_at`
 
 func (s *store) list(ctx context.Context, orgID string, limit, offset int) ([]Contact, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+contactColumns+`
 		 FROM contacts
-		 WHERE org_id = $1
+		 WHERE deleted_at IS NULL
 		 ORDER BY created_at DESC, id
-		 LIMIT $2 OFFSET $3`, orgID, limit, offset)
+		 LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -77,37 +79,39 @@ func (s *store) list(ctx context.Context, orgID string, limit, offset int) ([]Co
 
 func (s *store) count(ctx context.Context, orgID string) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM contacts WHERE org_id = $1`, orgID).Scan(&n)
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM contacts WHERE deleted_at IS NULL`).Scan(&n)
 	return n, err
 }
 
 func (s *store) get(ctx context.Context, orgID, id string) (Contact, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+contactColumns+` FROM contacts WHERE org_id = $1 AND id = $2`, orgID, id)
+		`SELECT `+contactColumns+` FROM contacts WHERE id = $1 AND deleted_at IS NULL`, id)
 	return scanContact(row)
 }
 
 func (s *store) create(ctx context.Context, orgID string, in Input) (Contact, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO contacts (org_id, first_name, last_name, email, phone, account_id)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO contacts (first_name, last_name, email, phone, company_id)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING `+contactColumns,
-		orgID, in.FirstName, in.LastName, in.Email, in.Phone, in.AccountID)
+		in.FirstName, in.LastName, in.Email, in.Phone, in.AccountID)
 	return scanContact(row)
 }
 
 func (s *store) update(ctx context.Context, orgID, id string, in Input) (Contact, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE contacts
-		 SET first_name = $3, last_name = $4, email = $5, phone = $6, account_id = $7
-		 WHERE org_id = $1 AND id = $2
+		 SET first_name = $2, last_name = $3, email = $4, phone = $5,
+		     company_id = $6, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL
 		 RETURNING `+contactColumns,
-		orgID, id, in.FirstName, in.LastName, in.Email, in.Phone, in.AccountID)
+		id, in.FirstName, in.LastName, in.Email, in.Phone, in.AccountID)
 	return scanContact(row)
 }
 
 func (s *store) delete(ctx context.Context, orgID, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM contacts WHERE org_id = $1 AND id = $2`, orgID, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, id)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return ErrNotFound
@@ -120,14 +124,14 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 	return nil
 }
 
-// accountInOrg reports whether the account exists within the caller's org. Used
-// before storing a contact's account_id: the FK alone would happily point at
-// another tenant's account.
+// accountInOrg reports whether the company exists. Accounts are companies in
+// this schema and the deployment is single-tenant, so existence is the whole
+// check.
 func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM accounts WHERE org_id = $1 AND id = $2)`,
-		orgID, accountID).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM companies WHERE id = $1)`,
+		accountID).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {
 			return false, nil // malformed id can't name an account

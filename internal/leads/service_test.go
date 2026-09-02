@@ -4,37 +4,41 @@ import "testing"
 
 func ptr[T any](v T) *T { return &v }
 
-func TestStagesMatchTheRedesignedLifecycle(t *testing.T) {
-	// new → contacted → replied → call_booked → call_done → [converted | dropped]
+func TestStagesMatchTheDatabaseVocabulary(t *testing.T) {
+	// Kept in sync with the leads_status_check constraint in the deployed
+	// database. These names carry spaces and differ from the original brief;
+	// the database is the authority.
 	for _, s := range []string{
-		"new", "contacted", "replied", "call_booked", "call_done", "converted", "dropped",
+		"new", "initial count", "deck sent", "call scheduled",
+		"call done", "proposal sent", "closed", "not interested",
 	} {
 		if !ValidStage(s) {
 			t.Errorf("ValidStage(%q) = false, want true", s)
 		}
 	}
 
-	// The stages the brief removed. "Initial count" merged into contacted, "deck
-	// sent" became an activity, and proposal/closed moved to the deal pipeline —
-	// leads don't close, deals do.
-	for _, s := range []string{"qualified", "proposal", "won", "lost", "deck_sent", ""} {
+	// The brief's underscored names, which no row in this database uses.
+	for _, s := range []string{
+		"contacted", "replied", "call_booked", "call_done", "converted", "dropped", "",
+	} {
 		if ValidStage(s) {
-			t.Errorf("ValidStage(%q) = true, want false — that stage was removed", s)
+			t.Errorf("ValidStage(%q) = true, want false — not a stage in this database", s)
 		}
 	}
 
-	// Keep in sync with the CHECK constraint in migration 000012.
-	if len(Stages) != 7 {
-		t.Fatalf("len(Stages) = %d, want 7", len(Stages))
+	if len(Stages) != 8 {
+		t.Fatalf("len(Stages) = %d, want 8", len(Stages))
 	}
 }
 
 func TestNextStageWalksTheLifecycle(t *testing.T) {
 	steps := map[string]string{
-		"new":         "contacted",
-		"contacted":   "replied",
-		"replied":     "call_booked",
-		"call_booked": "call_done",
+		"new":            "initial count",
+		"initial count":  "deck sent",
+		"deck sent":      "call scheduled",
+		"call scheduled": "call done",
+		"call done":      "proposal sent",
+		"proposal sent":  "closed",
 	}
 	for from, want := range steps {
 		if got := NextStage(from); got != want {
@@ -42,9 +46,8 @@ func TestNextStageWalksTheLifecycle(t *testing.T) {
 		}
 	}
 
-	// call_done hands off to the convert action rather than another stage, and a
-	// finished lead has nowhere to go.
-	for _, s := range []string{"call_done", "converted", "dropped"} {
+	// A finished lead has nowhere to go.
+	for _, s := range []string{"closed", "not interested"} {
 		if got := NextStage(s); got != "" {
 			t.Errorf("NextStage(%q) = %q, want no next step", s, got)
 		}
@@ -52,10 +55,10 @@ func TestNextStageWalksTheLifecycle(t *testing.T) {
 }
 
 func TestTerminalStages(t *testing.T) {
-	if !IsTerminal("converted") || !IsTerminal("dropped") {
-		t.Error("converted and dropped are terminal")
+	if !IsTerminal("closed") || !IsTerminal("not interested") {
+		t.Error("closed and not interested are terminal")
 	}
-	for _, s := range []string{"new", "contacted", "replied", "call_booked", "call_done"} {
+	for _, s := range []string{"new", "initial count", "deck sent", "call scheduled", "call done", "proposal sent"} {
 		if IsTerminal(s) {
 			t.Errorf("%q is still in play", s)
 		}
@@ -65,7 +68,7 @@ func TestTerminalStages(t *testing.T) {
 func TestValidFilterAcceptsUrgencyViews(t *testing.T) {
 	// Overdue and due-today are views over the follow-up date, not stages — the
 	// list must accept them even though ValidStage rejects them.
-	for _, f := range []string{FilterOverdue, FilterDueToday, FilterOpen, "new", "call_done"} {
+	for _, f := range []string{FilterOverdue, FilterDueToday, FilterOpen, "new", "call done"} {
 		if !ValidFilter(f) {
 			t.Errorf("ValidFilter(%q) = false, want true", f)
 		}

@@ -11,13 +11,13 @@ func line(desc string) ItemInput {
 func TestTransitions(t *testing.T) {
 	allowed := [][2]string{
 		{"draft", "sent"},
-		{"sent", "accepted"},
-		{"sent", "declined"},
+		{"sent", "approved"},
+		{"sent", "rejected"},
 		{"sent", "expired"},
 		// Revising an issued quote back to draft is what actually happens when a
 		// customer comes back with changes.
 		{"sent", "draft"},
-		{"declined", "draft"},
+		{"rejected", "draft"},
 		{"expired", "draft"},
 	}
 	for _, tc := range allowed {
@@ -27,15 +27,15 @@ func TestTransitions(t *testing.T) {
 	}
 
 	refused := [][2]string{
-		// Accepted is terminal: it records that a price was agreed.
-		{"accepted", "draft"},
-		{"accepted", "sent"},
-		{"accepted", "declined"},
+		// Approved is terminal: it records that a price was agreed.
+		{"approved", "draft"},
+		{"approved", "sent"},
+		{"approved", "rejected"},
 		// No skipping the issue step.
-		{"draft", "accepted"},
-		{"draft", "declined"},
+		{"draft", "approved"},
+		{"draft", "rejected"},
 		{"draft", "expired"},
-		{"declined", "accepted"},
+		{"rejected", "approved"},
 		{"expired", "sent"},
 	}
 	for _, tc := range refused {
@@ -46,7 +46,7 @@ func TestTransitions(t *testing.T) {
 }
 
 func TestValidStatusMatchesTheCheckConstraint(t *testing.T) {
-	for _, s := range []string{"draft", "sent", "accepted", "declined", "expired"} {
+	for _, s := range []string{"draft", "sent", "approved", "rejected", "expired"} {
 		if !ValidStatus(s) {
 			t.Errorf("ValidStatus(%q) = false, want true", s)
 		}
