@@ -10,13 +10,13 @@ import (
 )
 
 type Notification struct {
-	ChannelID string `json:"channel,omitempty"`
-	Text      string `json:"text"`
+	ChannelID string  `json:"channel,omitempty"`
+	Text      string  `json:"text"`
 	Blocks    []Block `json:"blocks,omitempty"`
 }
 
 type Block struct {
-	Type string    `json:"type"`
+	Type string     `json:"type"`
 	Text *TextBlock `json:"text,omitempty"`
 }
 

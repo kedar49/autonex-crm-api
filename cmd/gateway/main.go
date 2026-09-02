@@ -18,6 +18,7 @@ import (
 	"github.com/go-crm/services/internal/contacts"
 	"github.com/go-crm/services/internal/dashboard"
 	"github.com/go-crm/services/internal/deals"
+	"github.com/go-crm/services/internal/integrations"
 	"github.com/go-crm/services/internal/invoices"
 	"github.com/go-crm/services/internal/leads"
 	"github.com/go-crm/services/internal/notify"
@@ -53,6 +54,9 @@ func main() {
 		FromName: cfg.SMTPFromName,
 	}), cfg.WebAppURL)
 
+	// Third-party connections (Google Calendar) and the meeting booking they enable.
+	meetings := integrations.NewService(pool, cfg)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -73,7 +77,8 @@ func main() {
 	// Domain modules register their sub-routers here.
 	r.Mount("/api/v1/auth", auth.NewHandler(pool, cfg).Routes())
 	r.Mount("/api/v1/org", org.NewHandler(pool, cfg).Routes())
-	r.Mount("/api/v1/leads", leads.NewHandler(pool, cfg.JWTSecret).Routes())
+	r.Mount("/api/v1/integrations", integrations.NewHandler(pool, cfg).Routes())
+	r.Mount("/api/v1/leads", leads.NewHandler(pool, cfg.JWTSecret, meetings).Routes())
 	r.Mount("/api/v1/deals", deals.NewHandler(pool, cfg.JWTSecret, notifier).Routes())
 	r.Mount("/api/v1/accounts", accounts.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/contacts", contacts.NewHandler(pool, cfg.JWTSecret).Routes())

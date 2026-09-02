@@ -37,6 +37,11 @@ type Config struct {
 	// http://localhost:8080/api/v1/auth/sso — the provider callback URL is
 	// "<base>/<provider>/callback".
 	OIDCRedirectBase string
+	// IntegrationsRedirectBase is the public base URL of the third-party connect
+	// routes; the callback is "<base>/<provider>/callback". It is separate from
+	// OIDCRedirectBase because signing in and connecting a calendar are different
+	// consents, and Google matches the redirect URI exactly.
+	IntegrationsRedirectBase string
 	// OAuthCreds holds credentials keyed by provider name ("google", "github").
 	// Only providers with a non-empty client id are considered enabled.
 	OAuthCreds map[string]OAuthCredentials
@@ -71,14 +76,16 @@ func Load() Config {
 		GatewayAddr:      gatewayAddr(),
 		WebAppURL:        getenv("WEB_APP_URL", "http://localhost:4321"),
 		OIDCRedirectBase: getenv("OIDC_REDIRECT_BASE", "http://localhost:8080/api/v1/auth/sso"),
-		Timezone:         getenv("APP_TIMEZONE", "UTC"),
-		OAuthCreds:       loadOAuthCreds(),
-		SMTPHost:         getenv("SMTP_HOST", ""),
-		SMTPPort:         getint("SMTP_PORT", 587),
-		SMTPUser:         getenv("SMTP_USER", ""),
-		SMTPPassword:     getenv("SMTP_PASSWORD", ""),
-		SMTPFrom:         getenv("SMTP_FROM", ""),
-		SMTPFromName:     getenv("SMTP_FROM_NAME", "go-CRM"),
+		IntegrationsRedirectBase: getenv("INTEGRATIONS_REDIRECT_BASE",
+			"http://localhost:8080/api/v1/integrations"),
+		Timezone:     getenv("APP_TIMEZONE", "UTC"),
+		OAuthCreds:   loadOAuthCreds(),
+		SMTPHost:     getenv("SMTP_HOST", ""),
+		SMTPPort:     getint("SMTP_PORT", 587),
+		SMTPUser:     getenv("SMTP_USER", ""),
+		SMTPPassword: getenv("SMTP_PASSWORD", ""),
+		SMTPFrom:     getenv("SMTP_FROM", ""),
+		SMTPFromName: getenv("SMTP_FROM_NAME", "go-CRM"),
 	}
 }
 

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/activities"
+	"github.com/go-crm/services/internal/integrations"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -21,11 +23,26 @@ type Handler struct {
 	// module's own data always goes through svc.
 	pool   *pgxpool.Pool
 	secret string
+	// meetings may be nil; booking is then simply unavailable.
+	meetings MeetingBooker
 }
 
 // NewHandler wires the leads service to the pgx pool.
-func NewHandler(pool *pgxpool.Pool, secret string) *Handler {
-	return &Handler{svc: NewService(pool), pool: pool, secret: secret}
+// MeetingBooker books a calendar meeting. Narrow interface so the leads module
+// depends on the capability rather than the integrations service.
+type MeetingBooker interface {
+	BookCall(ctx context.Context, userID, title string, startAt time.Time,
+		duration time.Duration, leadID, dealID string) (integrations.Meeting, error)
+}
+
+// advanceResponse carries the updated lead and, when one was booked, the meeting.
+type advanceResponse struct {
+	Lead    Lead                  `json:"lead"`
+	Meeting *integrations.Meeting `json:"meeting,omitempty"`
+}
+
+func NewHandler(pool *pgxpool.Pool, secret string, meetings MeetingBooker) *Handler {
+	return &Handler{svc: NewService(pool), pool: pool, secret: secret, meetings: meetings}
 }
 
 // Routes returns the leads sub-router, mounted at /api/v1/leads.
@@ -111,7 +128,39 @@ func (h *Handler) advance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	lead, err := h.svc.AdvanceStage(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), adv)
+	leadID := chi.URLParam(r, "id")
+
+	// The meeting is booked before the stage moves. If Google refuses — usually
+	// because the calendar is not connected — nothing has changed yet, so the
+	// user can connect and retry rather than being left with a lead marked
+	// "call scheduled" and no call in the diary.
+	var meeting *integrations.Meeting
+	if adv.MeetingAt != nil && h.meetings != nil {
+		existing, err := h.svc.Get(ctx, middleware.OrgID(ctx), leadID)
+		if err != nil {
+			writeErr(w, err, "could not update that lead")
+			return
+		}
+		minutes := adv.MeetingMinutes
+		if minutes <= 0 {
+			minutes = 30
+		}
+		booked, err := h.meetings.BookCall(ctx, middleware.UserID(ctx),
+			"Call with "+leadLabel(existing), *adv.MeetingAt,
+			time.Duration(minutes)*time.Minute, leadID, "")
+		if err != nil {
+			if errors.Is(err, integrations.ErrNotConnected) {
+				httpx.WriteError(w, http.StatusPreconditionRequired,
+					"connect your Google Calendar first, then book the call")
+				return
+			}
+			httpx.WriteServerError(w, "could not create the calendar event", err)
+			return
+		}
+		meeting = &booked
+	}
+
+	lead, err := h.svc.AdvanceStage(ctx, middleware.OrgID(ctx), leadID, adv)
 	if err != nil {
 		writeErr(w, err, "could not update that lead")
 		return
@@ -127,8 +176,18 @@ func (h *Handler) advance(w http.ResponseWriter, r *http.Request) {
 	if adv.Note != nil && *adv.Note != "" {
 		h.logNote(ctx, lead, *adv.Note)
 	}
+	if meeting != nil {
+		activities.Log(ctx, h.pool, activities.Entry{
+			OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
+			LeadID:  lead.ID,
+			Subject: "Google Meet booked for " + meeting.StartAt.Format("2 Jan 15:04"),
+			Body:    meeting.MeetLink,
+		})
+	}
 
-	httpx.WriteJSON(w, http.StatusOK, lead)
+	// The lead is returned under its own key so the booked meeting can travel
+	// with it; the client needs the Meet link at the moment it books.
+	httpx.WriteJSON(w, http.StatusOK, advanceResponse{Lead: lead, Meeting: meeting})
 }
 
 func (h *Handler) convert(w http.ResponseWriter, r *http.Request) {

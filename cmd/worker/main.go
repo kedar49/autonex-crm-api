@@ -10,6 +10,7 @@ import (
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/events"
 	"github.com/nats-io/nats.go"
+	"golang.org/x/oauth2"
 )
 
 func main() {
@@ -59,7 +60,12 @@ func main() {
 		log.Printf("[WORKER] Calendar Followup Sync for Org %s", evt.OrgID)
 		if token, ok := evt.Payload["google_access_token"].(string); ok && token != "" {
 			title, _ := evt.Payload["title"].(string)
-			_, _ = googleClient.CreateEvent(context.Background(), token, google.CalendarEventInput{
+			ctx := context.Background()
+			// CreateEvent takes an authenticated client so it can refresh; the
+			// worker only has a bare access token, so wrap it as a static source.
+			authed := oauth2.NewClient(ctx, oauth2.StaticTokenSource(
+				&oauth2.Token{AccessToken: token}))
+			_, _ = googleClient.CreateEvent(ctx, authed, google.CalendarEventInput{
 				Summary: title,
 			})
 		}

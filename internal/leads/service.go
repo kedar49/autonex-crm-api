@@ -82,6 +82,13 @@ type Advance struct {
 	// left to chase", which a nil date alone cannot express.
 	ClearFollowUp bool    `json:"clearFollowUp"`
 	Note          *string `json:"note"`
+
+	// MeetingAt, when set, books a Google Calendar event with a Meet link at that
+	// time. FollowUpAt stays a date for the queue; this is the actual appointment,
+	// which needs a time of day.
+	MeetingAt *time.Time `json:"meetingAt"`
+	// MeetingMinutes is the meeting length; 30 when unset.
+	MeetingMinutes int `json:"meetingMinutes"`
 }
 
 // Page is one page of leads plus the counts the funnel strip and filter pills need.
