@@ -37,13 +37,27 @@ type DealMove struct {
 // usable and does nothing, so a caller never has to guard the call site.
 type Notifier struct {
 	pool      *pgxpool.Pool
+	store     *Store
 	mail      mailer.Sender
 	webAppURL string
 }
 
 func New(pool *pgxpool.Pool, mail mailer.Sender, webAppURL string) *Notifier {
-	return &Notifier{pool: pool, mail: mail, webAppURL: webAppURL}
+	return &Notifier{
+		pool:      pool,
+		store:     NewStore(pool),
+		mail:      mail,
+		webAppURL: webAppURL,
+	}
 }
+
+func (n *Notifier) Store() *Store {
+	if n == nil {
+		return nil
+	}
+	return n.store
+}
+
 
 // DealMoved emails the mover's colleagues that a card changed column.
 //

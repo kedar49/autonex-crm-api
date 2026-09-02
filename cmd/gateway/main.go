@@ -86,6 +86,8 @@ func main() {
 	r.Mount("/api/v1/invoices", invoices.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/activities", activities.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/dashboard", dashboard.NewHandler(pool, cfg.JWTSecret).Routes())
+	r.Mount("/api/v1/notifications", notify.NewHandler(notifier.Store(), cfg.JWTSecret).Routes())
+
 
 	srv := &http.Server{
 		Addr:              cfg.GatewayAddr,
