@@ -41,24 +41,27 @@ func (s *store) fromQuote(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Only an accepted quote can be billed, and the row is locked so the status
+	// Only an approved quote can be billed, and the row is locked so the status
 	// can't change underneath the copy.
+	//
+	// A quote header here carries its company, deal, author and status; the
+	// currency lives on the current version row. There is no title, contact or
+	// notes to copy.
 	var (
-		title    *string
 		currency string
 		status   string
-		account  *string
-		contact  *string
-		deal     *string
+		company  *string
 		owner    *string
-		notes    *string
 	)
 	err = tx.QueryRow(ctx,
-		`SELECT title, currency, status, account_id::text, contact_id::text,
-		        deal_id::text, owner_user_id::text, notes
-		 FROM quotes WHERE org_id = $1 AND id = $2 FOR UPDATE`,
-		orgID, quoteID,
-	).Scan(&title, &currency, &status, &account, &contact, &deal, &owner, &notes)
+		`SELECT q.status, COALESCE(v.currency, 'USD'),
+		        q.company_id::text, q.created_by::text
+		   FROM quotes q
+		   LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current
+		  WHERE q.id = $1 AND q.deleted_at IS NULL
+		    FOR UPDATE OF q`,
+		quoteID,
+	).Scan(&status, &currency, &company, &owner)
 
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return "", ErrQuoteNotInvoiceable
@@ -66,7 +69,7 @@ func (s *store) fromQuote(
 	if err != nil {
 		return "", err
 	}
-	if status != "accepted" {
+	if status != "approved" {
 		return "", ErrQuoteNotInvoiceable
 	}
 
@@ -84,11 +87,12 @@ func (s *store) fromQuote(
 	var id string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO invoices
-		   (org_id, number, title, currency, quote_id, account_id, contact_id,
-		    deal_id, owner_user_id, notes, issue_date, due_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_DATE, $11)
+		   (invoice_number, status, currency, quote_id, company_id,
+		    account_manager_id, due_date, amount_due)
+		 VALUES ($1, 'draft', $2, $3, $4,
+		         (SELECT id FROM profiles WHERE id = $5::uuid), $6, 0)
 		 RETURNING id::text`,
-		orgID, number, title, currency, quoteID, account, contact, deal, owner, notes, due,
+		number, currency, quoteID, company, owner, due,
 	).Scan(&id); err != nil {
 		// A unique violation here is the partial index: this quote already has a
 		// live invoice.

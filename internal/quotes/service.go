@@ -277,6 +277,15 @@ func validate(in Input) error {
 	if in.Notes != nil && len(*in.Notes) > 5000 {
 		return invalid("notes must be 5000 characters or fewer")
 	}
+	// company_id and created_by are NOT NULL in this deployment, so a quote
+	// without them fails in the database with an opaque error. Reject it here
+	// instead, where the message can name the field.
+	if in.AccountID == nil || *in.AccountID == "" {
+		return invalid("a quote needs a company")
+	}
+	if in.OwnerUserID == nil || *in.OwnerUserID == "" {
+		return invalid("a quote needs an owner")
+	}
 	if len(in.Items) == 0 {
 		return invalid("a quote needs at least one line item")
 	}

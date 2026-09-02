@@ -304,6 +304,12 @@ func validate(in Input) error {
 	if in.IssueDate != nil && in.DueDate != nil && in.DueDate.Before(*in.IssueDate) {
 		return invalid("the due date cannot be before the issue date")
 	}
+	// company_id is NOT NULL in this deployment, so an invoice without one fails
+	// in the database with an opaque error. Reject it here, where the message can
+	// name the field.
+	if in.AccountID == nil || *in.AccountID == "" {
+		return invalid("an invoice needs a company")
+	}
 	if len(in.Items) == 0 {
 		return invalid("an invoice needs at least one line item")
 	}

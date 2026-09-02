@@ -67,7 +67,11 @@ func TestStatusesMatchTheCheckConstraint(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	ok := Input{Title: ptr("March"), Items: []ItemInput{line("Consulting")}}
+	// company_id is NOT NULL in the database, so it is required here; every case
+	// below carries one unless it is the case being tested.
+	company := ptr("company-id")
+
+	ok := Input{Title: ptr("March"), AccountID: company, Items: []ItemInput{line("Consulting")}}
 	if err := validate(ok); err != nil {
 		t.Fatalf("valid invoice rejected: %v", err)
 	}
@@ -76,6 +80,7 @@ func TestValidate(t *testing.T) {
 	earlier := issue.Add(-24 * time.Hour)
 
 	tests := map[string]Input{
+		"no company":        {Title: ptr("March"), Items: []ItemInput{line("Consulting")}},
 		"no items":          {Title: ptr("March")},
 		"blank description": {Items: []ItemInput{{Quantity: 1, UnitPrice: 10}}},
 		"negative quantity": {Items: []ItemInput{{Description: "X", Quantity: -1}}},
@@ -90,6 +95,9 @@ func TestValidate(t *testing.T) {
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
+			if name != "no company" && in.AccountID == nil {
+				in.AccountID = company
+			}
 			err := validate(in)
 			if err == nil {
 				t.Fatal("expected rejection")

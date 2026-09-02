@@ -105,12 +105,20 @@ func TestNormalizeKeepsAPricedLineWithoutADescription(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	ok := Input{Title: ptr("Q3"), Items: []ItemInput{line("Consulting")}}
+	// company_id and created_by are NOT NULL in the database, so both are
+	// required here; every case below carries them unless it is the one being
+	// tested.
+	company, owner := ptr("company-id"), ptr("owner-id")
+
+	ok := Input{Title: ptr("Q3"), AccountID: company, OwnerUserID: owner,
+		Items: []ItemInput{line("Consulting")}}
 	if err := validate(ok); err != nil {
 		t.Fatalf("valid quote rejected: %v", err)
 	}
 
 	tests := map[string]Input{
+		"no company":        {Title: ptr("Q3"), OwnerUserID: owner, Items: []ItemInput{line("Consulting")}},
+		"no owner":          {Title: ptr("Q3"), AccountID: company, Items: []ItemInput{line("Consulting")}},
 		"no items":          {Title: ptr("Q3")},
 		"blank description": {Items: []ItemInput{{Quantity: 1, UnitPrice: 10}}},
 		"negative quantity": {Items: []ItemInput{{Description: "X", Quantity: -1}}},
@@ -120,6 +128,13 @@ func TestValidate(t *testing.T) {
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
+			// Fill the refs the case is not about, so it fails on its own rule.
+			if name != "no company" && in.AccountID == nil {
+				in.AccountID = company
+			}
+			if name != "no owner" && in.OwnerUserID == nil {
+				in.OwnerUserID = owner
+			}
 			err := validate(in)
 			if err == nil {
 				t.Fatal("expected rejection")

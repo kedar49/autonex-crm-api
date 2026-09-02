@@ -178,17 +178,17 @@ func (h *Handler) downloadPDF(w http.ResponseWriter, r *http.Request) {
 		taxable := item.Quantity * item.UnitPrice
 		taxAmt := taxable * (item.TaxPercent / 100.0)
 		items[i] = pdf.InvoiceItemData{
-			SrNo:          i + 1,
-			Description:   item.Description,
-			HSNSAC:        "998313",
-			Qty:           item.Quantity,
-			UnitPrice:     item.UnitPrice,
-			TaxableValue:  taxable,
-			CGSTRate:      item.TaxPercent / 2.0,
-			CGSTAmount:    taxAmt / 2.0,
-			SGSTRate:      item.TaxPercent / 2.0,
-			SGSTAmount:    taxAmt / 2.0,
-			TotalAmount:   taxable + taxAmt,
+			SrNo:         i + 1,
+			Description:  item.Description,
+			HSNSAC:       "998313",
+			Qty:          item.Quantity,
+			UnitPrice:    item.UnitPrice,
+			TaxableValue: taxable,
+			CGSTRate:     item.TaxPercent / 2.0,
+			CGSTAmount:   taxAmt / 2.0,
+			SGSTRate:     item.TaxPercent / 2.0,
+			SGSTAmount:   taxAmt / 2.0,
+			TotalAmount:  taxable + taxAmt,
 		}
 	}
 
