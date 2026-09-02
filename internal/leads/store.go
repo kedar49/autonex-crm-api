@@ -88,7 +88,7 @@ const leadColumns = `
 	l.email, l.phone, l.linkedin_url, l.source, l.notes,
 	l.value_estimate                   AS value,
 	l.status                           AS stage,
-	NULL::text                         AS account_id,
+	l.company_id::text                 AS account_id,
 	c.name                             AS account_name,
 	c.industry                         AS account_industry,
 	c.name                             AS company,
@@ -210,20 +210,22 @@ func (s *store) get(ctx context.Context, orgID, id string) (Lead, error) {
 		`SELECT `+leadColumns+leadFrom+`WHERE l.id = $1 AND l.deleted_at IS NULL`, id))
 }
 
-// create writes the fields this database has a home for. Last name, the
-// free-text company and the account link have no column here — the schema models
-// a lead's company through company_id — so the API still accepts them and they
-// are dropped, rather than failing the insert on a column that doesn't exist.
+// create writes the fields this database has a home for. The account link is
+// company_id: an account is a company in this schema, so the accountId the client
+// sends is stored there. Only the last name and the free-text company fallback
+// have no column, and those are dropped.
 func (s *store) create(ctx context.Context, orgID string, in Input) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO leads
 		   (contact_name, job_title, email, phone, linkedin_url, contact_id,
-		    source, notes, value_estimate, status, assigned_to, next_follow_up_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::date)
+		    company_id, source, notes, value_estimate, status, assigned_to,
+		    next_follow_up_date)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::date)
 		 RETURNING id::text`,
 		in.FirstName, in.Title, in.Email, in.Phone, in.LinkedIn, in.ContactID,
-		in.Source, in.Notes, in.Value, in.Stage, in.OwnerUserID, in.FollowUpAt,
+		in.AccountID, in.Source, in.Notes, in.Value, in.Stage, in.OwnerUserID,
+		in.FollowUpAt,
 	).Scan(&id)
 	return id, translate(err)
 }
@@ -232,12 +234,12 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
 		 SET contact_name = $2, job_title = $3, email = $4, phone = $5,
-		     linkedin_url = $6, contact_id = $7, source = $8, notes = $9,
-		     value_estimate = $10, status = $11, assigned_to = $12,
-		     next_follow_up_date = $13::date, updated_at = now()
+		     linkedin_url = $6, contact_id = $7, company_id = $8, source = $9,
+		     notes = $10, value_estimate = $11, status = $12, assigned_to = $13,
+		     next_follow_up_date = $14::date, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id, in.FirstName, in.Title, in.Email, in.Phone, in.LinkedIn,
-		in.ContactID, in.Source, in.Notes, in.Value, in.Stage,
+		in.ContactID, in.AccountID, in.Source, in.Notes, in.Value, in.Stage,
 		in.OwnerUserID, in.FollowUpAt)
 	if err != nil {
 		return translate(err)

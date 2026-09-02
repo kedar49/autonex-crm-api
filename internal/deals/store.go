@@ -70,7 +70,7 @@ const dealColumns = `
 	NULL::text                 AS owner_email,
 	d.primary_contact_id::text AS contact_id,
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
-	NULL::text                 AS account_id,
+	d.company_id::text         AS account_id,
 	d.expected_close_date,
 	(row_number() OVER (PARTITION BY d.stage ORDER BY d.created_at, d.id) * 1000)::float8,
 	d.created_at, d.updated_at`
@@ -107,18 +107,19 @@ func (s *store) get(ctx context.Context, orgID, id string) (Deal, error) {
 		`SELECT `+dealColumns+dealFrom+`WHERE d.id = $1 AND d.deleted_at IS NULL`, id))
 }
 
-// create adds the deal to its stage. The account link has no column in this
-// schema — a deal reaches its company through company_id — so an accountId sent
-// by the client is accepted and dropped rather than failing the insert.
+// create adds the deal to its stage. The account link is company_id: an account
+// is a company in this schema, so the accountId the client sends is stored
+// there.
 func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO deals
-		   (title, notes, amount, stage, owner_id, primary_contact_id, expected_close_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		   (title, notes, amount, stage, owner_id, primary_contact_id,
+		    company_id, expected_close_date)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id::text`,
 		in.Title, in.Description, in.Amount, in.Stage, in.OwnerUserID,
-		in.ContactID, in.ExpectedCloseDate,
+		in.ContactID, in.AccountID, in.ExpectedCloseDate,
 	).Scan(&id)
 	if err != nil {
 		return Deal{}, translate(err)
@@ -130,11 +131,11 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE deals
 		 SET title = $2, notes = $3, amount = $4, stage = $5,
-		     owner_id = $6, primary_contact_id = $7,
-		     expected_close_date = $8, updated_at = now()
+		     owner_id = $6, primary_contact_id = $7, company_id = $8,
+		     expected_close_date = $9, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id, in.Title, in.Description, in.Amount, in.Stage,
-		in.OwnerUserID, in.ContactID, in.ExpectedCloseDate)
+		in.OwnerUserID, in.ContactID, in.AccountID, in.ExpectedCloseDate)
 	if err != nil {
 		return Deal{}, translate(err)
 	}
