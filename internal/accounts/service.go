@@ -78,6 +78,42 @@ func (s *Service) Get(ctx context.Context, orgID, id string) (Account, error) {
 	return s.store.get(ctx, orgID, id)
 }
 
+// GetFullProfile returns the full company profile including VIGIL configuration, plant locations, and linked deals/quotes/invoices/contacts.
+func (s *Service) GetFullProfile(ctx context.Context, orgID, id string) (FullCompanyProfilePayload, error) {
+	return s.store.getFullProfile(ctx, orgID, id)
+}
+
+// UpdateFullProfile updates account details and upserts the company profile extension data.
+func (s *Service) UpdateFullProfile(ctx context.Context, orgID, id string, in ProfileInput) (FullCompanyProfilePayload, error) {
+	preparedBase, err := s.prepare(ctx, orgID, Input{
+		Name:        in.Name,
+		Website:     in.Website,
+		Industry:    in.Industry,
+		Phone:       in.Phone,
+		Notes:       in.Notes,
+		OwnerUserID: in.OwnerUserID,
+	})
+	if err != nil {
+		return FullCompanyProfilePayload{}, err
+	}
+	in.Name = preparedBase.Name
+	in.Website = preparedBase.Website
+	in.Industry = preparedBase.Industry
+	in.Phone = preparedBase.Phone
+	in.Notes = preparedBase.Notes
+	in.OwnerUserID = preparedBase.OwnerUserID
+
+	in.Tagline = trimmedOrNil(in.Tagline)
+	in.Description = trimmedOrNil(in.Description)
+	in.PrimaryColor = trimmedOrNil(in.PrimaryColor)
+	in.BannerURL = trimmedOrNil(in.BannerURL)
+	in.AMCStatus = trimmedOrNil(in.AMCStatus)
+	in.AMCStartDate = trimmedOrNil(in.AMCStartDate)
+	in.AMCEndDate = trimmedOrNil(in.AMCEndDate)
+
+	return s.store.upsertProfile(ctx, orgID, id, in)
+}
+
 // Create validates and stores a new account.
 func (s *Service) Create(ctx context.Context, orgID string, in Input) (Account, error) {
 	in, err := s.prepare(ctx, orgID, in)

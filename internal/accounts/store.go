@@ -11,6 +11,7 @@ package accounts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -18,6 +19,12 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+var (
+	jsonMarshal   = json.Marshal
+	jsonUnmarshal = json.Unmarshal
+)
+
 
 var (
 	// ErrNotFound means no account with that id exists.
@@ -223,3 +230,335 @@ func isPgCode(err error, code string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == code
 }
+
+// --- Company Profile Extensions ---
+
+type PlantLocation struct {
+	Name      string `json:"name"`
+	City      string `json:"city"`
+	Address   string `json:"address,omitempty"`
+	SPOCName  string `json:"spocName,omitempty"`
+	SPOCPhone string `json:"spocPhone,omitempty"`
+}
+
+type HardwareSpecs struct {
+	EdgeProcessor string `json:"edgeProcessor,omitempty"`
+	CameraCount   int    `json:"cameraCount,omitempty"`
+	SpeakerCount  int    `json:"speakerCount,omitempty"`
+	NVRMake       string `json:"nvrMake,omitempty"`
+}
+
+type CustomSection struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+type CompanyProfile struct {
+	CompanyID      string          `json:"companyId"`
+	Tagline        *string         `json:"tagline"`
+	Description    *string         `json:"description"`
+	PrimaryColor   string          `json:"primaryColor"`
+	BannerURL      *string         `json:"bannerUrl"`
+	PlantLocations []PlantLocation `json:"plantLocations"`
+	AIDetections   []string        `json:"aiDetections"`
+	HardwareSpecs  HardwareSpecs   `json:"hardwareSpecs"`
+	AMCStatus      string          `json:"amcStatus"`
+	AMCStartDate   *string         `json:"amcStartDate"`
+	AMCEndDate     *string         `json:"amcEndDate"`
+	AMCValue       float64         `json:"amcValue"`
+	CustomSections []CustomSection `json:"customSections"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+}
+
+type LinkedDeal struct {
+	ID                   string    `json:"id"`
+	Title                string    `json:"title"`
+	Stage                string    `json:"stage"`
+	Amount               float64   `json:"amount"`
+	Probability          *int      `json:"probability"`
+	SiteAssessmentDate   *string   `json:"siteAssessmentDate"`
+	SiteAssessmentLoc    *string   `json:"siteAssessmentLocation"`
+	ExpectedCloseDate    *string   `json:"expectedCloseDate"`
+	CreatedAt            time.Time `json:"createdAt"`
+}
+
+type LinkedQuote struct {
+	ID             string    `json:"id"`
+	Number         *string   `json:"number"`
+	Status         string    `json:"status"`
+	Total          float64   `json:"total"`
+	Currency       string    `json:"currency"`
+	CurrentVersion int       `json:"currentVersion"`
+	ValidUntil     *string   `json:"validUntil"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
+type LinkedInvoice struct {
+	ID            string    `json:"id"`
+	InvoiceNumber *string   `json:"invoiceNumber"`
+	Title         *string   `json:"title"`
+	Status        string    `json:"status"`
+	Total         float64   `json:"total"`
+	AmountDue     float64   `json:"amountDue"`
+	AmountPaid    float64   `json:"amountPaid"`
+	DueDate       *string   `json:"dueDate"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type LinkedContact struct {
+	ID        string  `json:"id"`
+	FirstName string  `json:"firstName"`
+	LastName  *string `json:"lastName"`
+	Email     *string `json:"email"`
+	Phone     *string `json:"phone"`
+	Title     *string `json:"title"`
+}
+
+type FullCompanyProfilePayload struct {
+	Account  Account        `json:"account"`
+	Profile  CompanyProfile `json:"profile"`
+	Deals    []LinkedDeal   `json:"deals"`
+	Quotes   []LinkedQuote  `json:"quotes"`
+	Invoices []LinkedInvoice `json:"invoices"`
+	Contacts []LinkedContact `json:"contacts"`
+}
+
+type ProfileInput struct {
+	Name           string          `json:"name"`
+	Website        *string         `json:"website"`
+	Industry       *string         `json:"industry"`
+	Phone          *string         `json:"phone"`
+	Notes          *string         `json:"notes"`
+	OwnerUserID    *string         `json:"ownerUserId"`
+	Tagline        *string         `json:"tagline"`
+	Description    *string         `json:"description"`
+	PrimaryColor   *string         `json:"primaryColor"`
+	BannerURL      *string         `json:"bannerUrl"`
+	PlantLocations []PlantLocation `json:"plantLocations"`
+	AIDetections   []string        `json:"aiDetections"`
+	HardwareSpecs  HardwareSpecs   `json:"hardwareSpecs"`
+	AMCStatus      *string         `json:"amcStatus"`
+	AMCStartDate   *string         `json:"amcStartDate"`
+	AMCEndDate     *string         `json:"amcEndDate"`
+	AMCValue       *float64        `json:"amcValue"`
+	CustomSections []CustomSection `json:"customSections"`
+}
+
+func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (FullCompanyProfilePayload, error) {
+	acc, err := s.get(ctx, orgID, companyID)
+	if err != nil {
+		return FullCompanyProfilePayload{}, err
+	}
+
+	prof := CompanyProfile{
+		CompanyID:      companyID,
+		PrimaryColor:   "#6366f1",
+		PlantLocations: []PlantLocation{},
+		AIDetections:   []string{},
+		HardwareSpecs:  HardwareSpecs{},
+		AMCStatus:      "none",
+		CustomSections: []CustomSection{},
+		CreatedAt:      acc.CreatedAt,
+		UpdatedAt:      acc.UpdatedAt,
+	}
+
+	var plantRaw, hwRaw, csRaw []byte
+	var amcStart, amcEnd *string
+	var amcVal *float64
+
+	row := s.pool.QueryRow(ctx,
+		`SELECT company_id::text, tagline, description, primary_color, banner_url,
+		        plant_locations, ai_detections, hardware_specs, amc_status,
+		        amc_start_date::text, amc_end_date::text, amc_value, custom_sections,
+		        created_at, updated_at
+		 FROM company_profiles
+		 WHERE company_id = $1`, companyID)
+
+	var pID string
+	err = row.Scan(
+		&pID, &prof.Tagline, &prof.Description, &prof.PrimaryColor, &prof.BannerURL,
+		&plantRaw, &prof.AIDetections, &hwRaw, &prof.AMCStatus,
+		&amcStart, &amcEnd, &amcVal, &csRaw,
+		&prof.CreatedAt, &prof.UpdatedAt,
+	)
+	if err == nil {
+		prof.AMCStartDate = amcStart
+		prof.AMCEndDate = amcEnd
+		if amcVal != nil {
+			prof.AMCValue = *amcVal
+		}
+		if len(plantRaw) > 0 {
+			_ = jsonUnmarshal(plantRaw, &prof.PlantLocations)
+		}
+		if len(hwRaw) > 0 {
+			_ = jsonUnmarshal(hwRaw, &prof.HardwareSpecs)
+		}
+		if len(csRaw) > 0 {
+			_ = jsonUnmarshal(csRaw, &prof.CustomSections)
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return FullCompanyProfilePayload{}, translate(err)
+	}
+
+	if prof.PlantLocations == nil {
+		prof.PlantLocations = []PlantLocation{}
+	}
+	if prof.AIDetections == nil {
+		prof.AIDetections = []string{}
+	}
+	if prof.CustomSections == nil {
+		prof.CustomSections = []CustomSection{}
+	}
+
+	// Fetch linked deals
+	deals := make([]LinkedDeal, 0)
+	dRows, err := s.pool.Query(ctx,
+		`SELECT id::text, title, stage, amount, probability, site_assessment_date::text, site_assessment_location, expected_close_date::text, created_at
+		 FROM deals
+		 WHERE company_id = $1 AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID)
+	if err == nil {
+		defer dRows.Close()
+		for dRows.Next() {
+			var d LinkedDeal
+			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.CreatedAt); scanErr == nil {
+				deals = append(deals, d)
+			}
+		}
+	}
+
+	// Fetch linked quotes
+	quotes := make([]LinkedQuote, 0)
+	qRows, err := s.pool.Query(ctx,
+		`SELECT id::text, number, status, total, currency, current_version, valid_until::text, created_at
+		 FROM quotes
+		 WHERE company_id = $1 AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID)
+	if err == nil {
+		defer qRows.Close()
+		for qRows.Next() {
+			var q LinkedQuote
+			if scanErr := qRows.Scan(&q.ID, &q.Number, &q.Status, &q.Total, &q.Currency, &q.CurrentVersion, &q.ValidUntil, &q.CreatedAt); scanErr == nil {
+				quotes = append(quotes, q)
+			}
+		}
+	}
+
+	// Fetch linked invoices
+	invoices := make([]LinkedInvoice, 0)
+	iRows, err := s.pool.Query(ctx,
+		`SELECT id::text, invoice_number, title, status, total, amount_due, amount_paid, due_date::text, created_at
+		 FROM invoices
+		 WHERE company_id = $1 AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID)
+	if err == nil {
+		defer iRows.Close()
+		for iRows.Next() {
+			var inv LinkedInvoice
+			if scanErr := iRows.Scan(&inv.ID, &inv.InvoiceNumber, &inv.Title, &inv.Status, &inv.Total, &inv.AmountDue, &inv.AmountPaid, &inv.DueDate, &inv.CreatedAt); scanErr == nil {
+				invoices = append(invoices, inv)
+			}
+		}
+	}
+
+	// Fetch linked contacts
+	contacts := make([]LinkedContact, 0)
+	cRows, err := s.pool.Query(ctx,
+		`SELECT id::text, first_name, last_name, email, phone, title
+		 FROM contacts
+		 WHERE company_id = $1 AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID)
+	if err == nil {
+		defer cRows.Close()
+		for cRows.Next() {
+			var c LinkedContact
+			if scanErr := cRows.Scan(&c.ID, &c.FirstName, &c.LastName, &c.Email, &c.Phone, &c.Title); scanErr == nil {
+				contacts = append(contacts, c)
+			}
+		}
+	}
+
+	return FullCompanyProfilePayload{
+		Account:  acc,
+		Profile:  prof,
+		Deals:    deals,
+		Quotes:   quotes,
+		Invoices: invoices,
+		Contacts: contacts,
+	}, nil
+}
+
+func (s *store) upsertProfile(ctx context.Context, orgID, companyID string, in ProfileInput) (FullCompanyProfilePayload, error) {
+	// Update main company details
+	_, err := s.update(ctx, orgID, companyID, Input{
+		Name:        in.Name,
+		Website:     in.Website,
+		Industry:    in.Industry,
+		Phone:       in.Phone,
+		Notes:       in.Notes,
+		OwnerUserID: in.OwnerUserID,
+	})
+	if err != nil {
+		return FullCompanyProfilePayload{}, err
+	}
+
+	plantRaw, _ := jsonMarshal(in.PlantLocations)
+	hwRaw, _ := jsonMarshal(in.HardwareSpecs)
+	csRaw, _ := jsonMarshal(in.CustomSections)
+
+	primaryColor := "#6366f1"
+	if in.PrimaryColor != nil && *in.PrimaryColor != "" {
+		primaryColor = *in.PrimaryColor
+	}
+
+	amcStatus := "none"
+	if in.AMCStatus != nil && *in.AMCStatus != "" {
+		amcStatus = *in.AMCStatus
+	}
+
+	amcVal := float64(0)
+	if in.AMCValue != nil {
+		amcVal = *in.AMCValue
+	}
+
+	aiDetections := in.AIDetections
+	if aiDetections == nil {
+		aiDetections = []string{}
+	}
+
+	_, err = s.pool.Exec(ctx,
+		`INSERT INTO company_profiles (
+			company_id, tagline, description, primary_color, banner_url,
+			plant_locations, ai_detections, hardware_specs, amc_status,
+			amc_start_date, amc_end_date, amc_value, custom_sections, updated_at
+		 ) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9,
+			$10, $11, $12, $13, now()
+		 )
+		 ON CONFLICT (company_id) DO UPDATE SET
+			tagline = EXCLUDED.tagline,
+			description = EXCLUDED.description,
+			primary_color = EXCLUDED.primary_color,
+			banner_url = EXCLUDED.banner_url,
+			plant_locations = EXCLUDED.plant_locations,
+			ai_detections = EXCLUDED.ai_detections,
+			hardware_specs = EXCLUDED.hardware_specs,
+			amc_status = EXCLUDED.amc_status,
+			amc_start_date = EXCLUDED.amc_start_date,
+			amc_end_date = EXCLUDED.amc_end_date,
+			amc_value = EXCLUDED.amc_value,
+			custom_sections = EXCLUDED.custom_sections,
+			updated_at = now()`,
+		companyID, in.Tagline, in.Description, primaryColor, in.BannerURL,
+		plantRaw, aiDetections, hwRaw, amcStatus,
+		in.AMCStartDate, in.AMCEndDate, amcVal, csRaw,
+	)
+	if err != nil {
+		return FullCompanyProfilePayload{}, translate(err)
+	}
+
+	return s.getFullProfile(ctx, orgID, companyID)
+}
+
