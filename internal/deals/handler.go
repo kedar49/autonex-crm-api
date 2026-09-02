@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/activities"
+	"github.com/go-crm/services/internal/notify"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -19,11 +20,14 @@ type Handler struct {
 	// module's own data always goes through svc.
 	pool   *pgxpool.Pool
 	secret string
+	// notifier may be nil; its methods tolerate that, so tests and any caller
+	// that does not care about email can leave it out.
+	notifier *notify.Notifier
 }
 
 // NewHandler wires the deals service to the pgx pool.
-func NewHandler(pool *pgxpool.Pool, secret string) *Handler {
-	return &Handler{svc: NewService(pool), pool: pool, secret: secret}
+func NewHandler(pool *pgxpool.Pool, secret string, notifier *notify.Notifier) *Handler {
+	return &Handler{svc: NewService(pool), pool: pool, secret: secret, notifier: notifier}
 }
 
 // Routes returns the deals sub-router, mounted at /api/v1/deals.
@@ -98,7 +102,7 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	deal, err := h.svc.Move(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), mv)
+	deal, previous, err := h.svc.Move(ctx, middleware.OrgID(ctx), chi.URLParam(r, "id"), mv)
 	if err != nil {
 		writeErr(w, err, "could not move deal")
 		return
@@ -108,6 +112,17 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 		OrgID: middleware.OrgID(ctx), Actor: middleware.UserID(ctx),
 		DealID:  deal.ID,
 		Subject: "Deal moved to " + StageLabel(deal.Stage),
+	})
+
+	// Delivered on a background goroutine: a drag should not wait on SMTP.
+	h.notifier.DealMoved(ctx, middleware.OrgID(ctx), middleware.UserID(ctx), notify.DealMove{
+		DealID:     deal.ID,
+		Title:      deal.Title,
+		FromStage:  previous,
+		ToStage:    deal.Stage,
+		CompanyID:  deref(deal.AccountID),
+		Amount:     deal.Amount,
+		StageLabel: StageLabel,
 	})
 	httpx.WriteJSON(w, http.StatusOK, deal)
 }

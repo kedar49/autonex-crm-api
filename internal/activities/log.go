@@ -46,19 +46,57 @@ func Log(ctx context.Context, pool *pgxpool.Pool, e Entry) {
 		return
 	}
 
-	_, err := pool.Exec(ctx,
-		`INSERT INTO activities
-		   (org_id, kind, subject, body, created_by,
-		    lead_id, deal_id, account_id, contact_id, quote_id, invoice_id)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::uuid,
-		         NULLIF($6, '')::uuid, NULLIF($7, '')::uuid, NULLIF($8, '')::uuid,
-		         NULLIF($9, '')::uuid, NULLIF($10, '')::uuid, NULLIF($11, '')::uuid)`,
-		e.OrgID, resolveKind(e.Kind), e.Subject, e.Body, e.Actor,
-		e.LeadID, e.DealID, e.AccountID, e.ContactID, e.QuoteID, e.InvoiceID)
-
-	if err != nil {
-		log.Printf("activity log: %q for org %s: %v", e.Subject, e.OrgID, err)
+	// This deployment stores the subject of an activity as a single
+	// (entity_type, entity_id) pair rather than one column per entity type, and
+	// has no subject column — the headline goes into the body. entity_type,
+	// entity_id and author_id are all NOT NULL, so an event that cannot name all
+	// three is skipped rather than attempted.
+	entityType, entityID := entityOf(e)
+	if entityType == "" || e.Actor == "" {
+		return
 	}
+
+	body := e.Subject
+	if e.Body != "" {
+		body = e.Subject + "\n\n" + e.Body
+	}
+
+	// INSERT ... SELECT FROM profiles rather than a subquery in VALUES: an actor
+	// with no profile row inserts nothing, instead of failing the NOT NULL on
+	// author_id.
+	tag, err := pool.Exec(ctx,
+		`INSERT INTO activities (entity_type, entity_id, type, body, author_id)
+		 SELECT $1, $2::uuid, $3, $4, p.id
+		   FROM profiles p WHERE p.id = $5::uuid`,
+		entityType, entityID, resolveKind(e.Kind), body, e.Actor)
+
+	switch {
+	case err != nil:
+		log.Printf("activity log: %q for org %s: %v", e.Subject, e.OrgID, err)
+	case tag.RowsAffected() == 0:
+		log.Printf("activity log: %q skipped, actor %s has no profile", e.Subject, e.Actor)
+	}
+}
+
+// entityOf reduces the per-entity ids on an Entry to the single
+// (entity_type, entity_id) pair this schema stores. An entry naming more than
+// one is recorded against the first, which is the most specific in practice.
+func entityOf(e Entry) (string, string) {
+	switch {
+	case e.LeadID != "":
+		return "lead", e.LeadID
+	case e.DealID != "":
+		return "deal", e.DealID
+	case e.AccountID != "":
+		return "company", e.AccountID
+	case e.ContactID != "":
+		return "contact", e.ContactID
+	case e.QuoteID != "":
+		return "quote", e.QuoteID
+	case e.InvoiceID != "":
+		return "invoice", e.InvoiceID
+	}
+	return "", ""
 }
 
 // resolveKind picks the kind to store. An unrecognised one would violate the

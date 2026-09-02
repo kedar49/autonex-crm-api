@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,16 @@ type Config struct {
 	// OAuthCreds holds credentials keyed by provider name ("google", "github").
 	// Only providers with a non-empty client id are considered enabled.
 	OAuthCreds map[string]OAuthCredentials
+
+	// SMTP settings for notification email. SMTPHost and SMTPFrom are what make
+	// mail live: with either missing, notifications are skipped rather than
+	// failing, so a deployment without a relay still works normally.
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUser     string
+	SMTPPassword string
+	SMTPFrom     string
+	SMTPFromName string
 }
 
 // knownProviders is the set of OIDC providers whose endpoints the auth module
@@ -62,6 +73,12 @@ func Load() Config {
 		OIDCRedirectBase: getenv("OIDC_REDIRECT_BASE", "http://localhost:8080/api/v1/auth/sso"),
 		Timezone:         getenv("APP_TIMEZONE", "UTC"),
 		OAuthCreds:       loadOAuthCreds(),
+		SMTPHost:         getenv("SMTP_HOST", ""),
+		SMTPPort:         getint("SMTP_PORT", 587),
+		SMTPUser:         getenv("SMTP_USER", ""),
+		SMTPPassword:     getenv("SMTP_PASSWORD", ""),
+		SMTPFrom:         getenv("SMTP_FROM", ""),
+		SMTPFromName:     getenv("SMTP_FROM_NAME", "go-CRM"),
 	}
 }
 
@@ -120,6 +137,15 @@ func loadOAuthCreds() map[string]OAuthCredentials {
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getint(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }

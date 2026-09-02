@@ -106,9 +106,10 @@ func (s *Service) Delete(ctx context.Context, orgID, id string) error {
 }
 
 // Move applies a drag-and-drop: change of column and/or position within one.
-func (s *Service) Move(ctx context.Context, orgID, id string, mv Move) (Deal, error) {
+// Move returns the moved deal and the stage it came from.
+func (s *Service) Move(ctx context.Context, orgID, id string, mv Move) (Deal, string, error) {
 	if !ValidStage(mv.Stage) {
-		return Deal{}, invalid("unknown stage %q", mv.Stage)
+		return Deal{}, "", invalid("unknown stage %q", mv.Stage)
 	}
 	return s.store.move(ctx, orgID, id, mv.Stage, mv.Index)
 }

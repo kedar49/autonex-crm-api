@@ -20,10 +20,12 @@ import (
 	"github.com/go-crm/services/internal/deals"
 	"github.com/go-crm/services/internal/invoices"
 	"github.com/go-crm/services/internal/leads"
+	"github.com/go-crm/services/internal/notify"
 	"github.com/go-crm/services/internal/org"
 	"github.com/go-crm/services/internal/quotes"
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/database"
+	"github.com/go-crm/services/pkg/mailer"
 	appmw "github.com/go-crm/services/pkg/middleware"
 )
 
@@ -39,6 +41,17 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 	defer pool.Close()
+
+	// Notification email. With no SMTP host configured this is a no-op sender,
+	// so the gateway behaves identically minus the mail.
+	notifier := notify.New(pool, mailer.New(mailer.Config{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		User:     cfg.SMTPUser,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+		FromName: cfg.SMTPFromName,
+	}), cfg.WebAppURL)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -61,7 +74,7 @@ func main() {
 	r.Mount("/api/v1/auth", auth.NewHandler(pool, cfg).Routes())
 	r.Mount("/api/v1/org", org.NewHandler(pool, cfg).Routes())
 	r.Mount("/api/v1/leads", leads.NewHandler(pool, cfg.JWTSecret).Routes())
-	r.Mount("/api/v1/deals", deals.NewHandler(pool, cfg.JWTSecret).Routes())
+	r.Mount("/api/v1/deals", deals.NewHandler(pool, cfg.JWTSecret, notifier).Routes())
 	r.Mount("/api/v1/accounts", accounts.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/contacts", contacts.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/quotes", quotes.NewHandler(pool, cfg.JWTSecret).Routes())

@@ -163,17 +163,26 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 // ignored: dragging a card between columns persists, dragging it within one
 // does not survive a reload. Adding a position column is the only way to change
 // that, which would be a schema change rather than a code one.
-func (s *store) move(ctx context.Context, orgID, id, stage string, index int) (Deal, error) {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE deals SET stage = $2, updated_at = now()
-		  WHERE id = $1 AND deleted_at IS NULL`, id, stage)
+// The previous stage is returned alongside the moved deal so callers can say
+// what changed. The CTE reads it in the same statement as the write, which is
+// both one round trip and immune to another move landing in between.
+func (s *store) move(ctx context.Context, orgID, id, stage string, index int) (Deal, string, error) {
+	var previous string
+	err := s.pool.QueryRow(ctx,
+		`WITH prev AS (SELECT stage FROM deals WHERE id = $1)
+		 UPDATE deals d
+		    SET stage = $2, updated_at = now()
+		   FROM prev
+		  WHERE d.id = $1 AND d.deleted_at IS NULL
+		 RETURNING prev.stage`, id, stage).Scan(&previous)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Deal{}, "", ErrNotFound
+	}
 	if err != nil {
-		return Deal{}, translate(err)
+		return Deal{}, "", translate(err)
 	}
-	if tag.RowsAffected() == 0 {
-		return Deal{}, ErrNotFound
-	}
-	return s.get(ctx, orgID, id)
+	d, err := s.get(ctx, orgID, id)
+	return d, previous, err
 }
 
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
