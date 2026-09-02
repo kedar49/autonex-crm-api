@@ -33,6 +33,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/{id}", h.get)
 	r.Put("/{id}", h.update)
 	r.Delete("/{id}", h.remove)
+	r.Get("/{id}/profile", h.getProfile)
+	r.Put("/{id}/profile", h.updateProfile)
 	return r
 }
 
@@ -91,6 +93,29 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *Handler) getProfile(w http.ResponseWriter, r *http.Request) {
+	payload, err := h.svc.GetFullProfile(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, err, "could not load company profile")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, payload)
+}
+
+func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
+	var in ProfileInput
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	payload, err := h.svc.UpdateFullProfile(r.Context(), middleware.OrgID(r.Context()), chi.URLParam(r, "id"), in)
+	if err != nil {
+		writeErr(w, err, "could not update company profile")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, payload)
+}
+
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
 	switch {
