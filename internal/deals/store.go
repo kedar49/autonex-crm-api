@@ -23,8 +23,6 @@ const (
 	pgForeignKeyViolation = "23503"
 )
 
-// positionGap is the spacing between cards in a column.
-const positionGap = 1000
 
 // Deal is the module's view of a row, including the denormalized owner and
 // contact labels the board renders on each card.
@@ -80,7 +78,7 @@ const dealFrom = `
 	LEFT JOIN profiles p ON p.id = d.owner_id
 	LEFT JOIN contacts c ON c.id = d.primary_contact_id `
 
-func (s *store) board(ctx context.Context, orgID string, limit int) ([]Deal, error) {
+func (s *store) board(ctx context.Context, _ string, limit int) ([]Deal, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+dealColumns+dealFrom+
 			`WHERE d.deleted_at IS NULL
@@ -102,7 +100,7 @@ func (s *store) board(ctx context.Context, orgID string, limit int) ([]Deal, err
 	return out, rows.Err()
 }
 
-func (s *store) get(ctx context.Context, orgID, id string) (Deal, error) {
+func (s *store) get(ctx context.Context, _ string, id string) (Deal, error) {
 	return scanDeal(s.pool.QueryRow(ctx,
 		`SELECT `+dealColumns+dealFrom+`WHERE d.id = $1 AND d.deleted_at IS NULL`, id))
 }
@@ -115,11 +113,11 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO deals
 		   (title, notes, amount, stage, owner_id, primary_contact_id,
-		    company_id, expected_close_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		    account_id, lead_id, expected_close_date)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id::text`,
 		in.Title, in.Description, in.Amount, in.Stage, in.OwnerUserID,
-		in.ContactID, in.AccountID, in.ExpectedCloseDate,
+		in.ContactID, in.AccountID, in.LeadID, in.ExpectedCloseDate,
 	).Scan(&id)
 	if err != nil {
 		return Deal{}, translate(err)
@@ -131,7 +129,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE deals
 		 SET title = $2, notes = $3, amount = $4, stage = $5,
-		     owner_id = $6, primary_contact_id = $7, company_id = $8,
+		     owner_id = $6, primary_contact_id = $7, account_id = $8,
 		     expected_close_date = $9, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id, in.Title, in.Description, in.Amount, in.Stage,
@@ -145,7 +143,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	return s.get(ctx, orgID, id)
 }
 
-func (s *store) delete(ctx context.Context, orgID, id string) error {
+func (s *store) delete(ctx context.Context, _ string, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM deals WHERE id = $1`, id)
 	if err != nil {
 		return translate(err)
@@ -166,7 +164,7 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 // The previous stage is returned alongside the moved deal so callers can say
 // what changed. The CTE reads it in the same statement as the write, which is
 // both one round trip and immune to another move landing in between.
-func (s *store) move(ctx context.Context, orgID, id, stage string, index int) (Deal, string, error) {
+func (s *store) move(ctx context.Context, orgID, id, stage string, _ int) (Deal, string, error) {
 	var previous string
 	err := s.pool.QueryRow(ctx,
 		`WITH prev AS (SELECT stage FROM deals WHERE id = $1)
@@ -187,7 +185,7 @@ func (s *store) move(ctx context.Context, orgID, id, stage string, index int) (D
 
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
 // existence is the only thing left to verify.
-func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
+func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error) {
 	if table == "accounts" {
 		table = "companies"
 	}
@@ -222,7 +220,7 @@ type Stats struct {
 	Amount float64 `json:"amount"`
 }
 
-func (s *store) stats(ctx context.Context, orgID string) ([]Stats, error) {
+func (s *store) stats(ctx context.Context, _ string) ([]Stats, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT stage, count(*), COALESCE(sum(amount), 0)::float8
 		 FROM deals WHERE deleted_at IS NULL GROUP BY stage`)

@@ -180,12 +180,12 @@ func (s *store) convert(
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO deals
 		   (org_id, title, amount, stage, owner_user_id, contact_id, account_id,
-		    expected_close_date, position)
+		    expected_close_date, position, lead_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
 		         COALESCE((SELECT max(position) + 1000 FROM deals
-		                   WHERE org_id = $1 AND stage = $4), 0))
+		                   WHERE org_id = $1 AND stage = $4), 0), $9)
 		 RETURNING id::text`,
-		orgID, title, amount, stage, owner, contactID, accountID, in.ExpectedCloseDate,
+		orgID, title, amount, stage, owner, contactID, accountID, in.ExpectedCloseDate, leadID,
 	).Scan(&dealID); err != nil {
 		return Conversion{}, err
 	}

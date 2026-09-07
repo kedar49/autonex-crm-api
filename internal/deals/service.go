@@ -42,6 +42,7 @@ type Input struct {
 	OwnerUserID       *string    `json:"ownerUserId"`
 	ContactID         *string    `json:"contactId"`
 	AccountID         *string    `json:"accountId"`
+	LeadID            *string    `json:"leadId"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 }
 

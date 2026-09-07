@@ -86,7 +86,7 @@ const accountColumns = `
 
 const accountFrom = ` FROM companies a LEFT JOIN profiles p ON p.id = a.owner_id `
 
-func (s *store) list(ctx context.Context, orgID string, limit, offset int) ([]Account, error) {
+func (s *store) list(ctx context.Context, _ string, limit, offset int) ([]Account, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+accountColumns+accountFrom+
 			`WHERE a.deleted_at IS NULL
@@ -109,14 +109,14 @@ func (s *store) list(ctx context.Context, orgID string, limit, offset int) ([]Ac
 	return out, rows.Err()
 }
 
-func (s *store) count(ctx context.Context, orgID string) (int, error) {
+func (s *store) count(ctx context.Context, _ string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM companies WHERE deleted_at IS NULL`).Scan(&n)
 	return n, err
 }
 
-func (s *store) get(ctx context.Context, orgID, id string) (Account, error) {
+func (s *store) get(ctx context.Context, _, id string) (Account, error) {
 	return scanAccount(s.pool.QueryRow(ctx,
 		`SELECT `+accountColumns+accountFrom+`WHERE a.id = $1 AND a.deleted_at IS NULL`, id))
 }
@@ -154,7 +154,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Account
 // delete removes a company only when nothing points at it. Deleting a linked
 // company would orphan contacts and cascade into deals, so refusing is the safe
 // reading of an ambiguous request; the caller can unlink first.
-func (s *store) delete(ctx context.Context, orgID, id string) error {
+func (s *store) delete(ctx context.Context, _, id string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -184,7 +184,7 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 
 // ownerInOrg reports whether the assignee exists. Owners are profiles in this
 // schema, and the deployment is single-tenant, so existence is the whole check.
-func (s *store) ownerInOrg(ctx context.Context, orgID, userID string) (bool, error) {
+func (s *store) ownerInOrg(ctx context.Context, _, userID string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, userID).Scan(&exists)
@@ -315,6 +315,18 @@ type LinkedContact struct {
 	Title     *string `json:"title"`
 }
 
+type LinkedLead struct {
+	ID        string    `json:"id"`
+	FirstName string    `json:"firstName"`
+	LastName  *string   `json:"lastName"`
+	Email     *string   `json:"email"`
+	Phone     *string   `json:"phone"`
+	Title     *string   `json:"title"`
+	Stage     string    `json:"stage"`
+	Value     *float64  `json:"value"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 type FullCompanyProfilePayload struct {
 	Account  Account        `json:"account"`
 	Profile  CompanyProfile `json:"profile"`
@@ -322,6 +334,7 @@ type FullCompanyProfilePayload struct {
 	Quotes   []LinkedQuote  `json:"quotes"`
 	Invoices []LinkedInvoice `json:"invoices"`
 	Contacts []LinkedContact `json:"contacts"`
+	Leads    []LinkedLead   `json:"leads"`
 }
 
 type ProfileInput struct {
@@ -416,7 +429,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	dRows, err := s.pool.Query(ctx,
 		`SELECT id::text, title, stage, amount, probability, site_assessment_date::text, site_assessment_location, expected_close_date::text, created_at
 		 FROM deals
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer dRows.Close()
@@ -433,7 +446,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	qRows, err := s.pool.Query(ctx,
 		`SELECT id::text, number, status, total, currency, current_version, valid_until::text, created_at
 		 FROM quotes
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer qRows.Close()
@@ -450,7 +463,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	iRows, err := s.pool.Query(ctx,
 		`SELECT id::text, invoice_number, title, status, total, amount_due, amount_paid, due_date::text, created_at
 		 FROM invoices
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer iRows.Close()
@@ -467,7 +480,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	cRows, err := s.pool.Query(ctx,
 		`SELECT id::text, first_name, last_name, email, phone, title
 		 FROM contacts
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer cRows.Close()
@@ -479,6 +492,23 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		}
 	}
 
+	// Fetch linked leads
+	leads := make([]LinkedLead, 0)
+	lRows, err := s.pool.Query(ctx,
+		`SELECT id::text, first_name, last_name, email, phone, title, stage, value, created_at
+		 FROM leads
+		 WHERE account_id = $1 AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID)
+	if err == nil {
+		defer lRows.Close()
+		for lRows.Next() {
+			var l LinkedLead
+			if scanErr := lRows.Scan(&l.ID, &l.FirstName, &l.LastName, &l.Email, &l.Phone, &l.Title, &l.Stage, &l.Value, &l.CreatedAt); scanErr == nil {
+				leads = append(leads, l)
+			}
+		}
+	}
+
 	return FullCompanyProfilePayload{
 		Account:  acc,
 		Profile:  prof,
@@ -486,6 +516,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		Quotes:   quotes,
 		Invoices: invoices,
 		Contacts: contacts,
+		Leads:    leads,
 	}, nil
 }
 

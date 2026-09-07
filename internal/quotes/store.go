@@ -124,7 +124,7 @@ const quoteFrom = `
 	LEFT JOIN profiles       p ON p.id = q.created_by
 	LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current `
 
-func (s *store) list(ctx context.Context, orgID, status string, limit, offset int) ([]Quote, error) {
+func (s *store) list(ctx context.Context, _, status string, limit, offset int) ([]Quote, error) {
 	// A single statement with an optional filter: passing '' means "any status",
 	// which keeps one query plan instead of two code paths.
 	rows, err := s.pool.Query(ctx,
@@ -148,7 +148,7 @@ func (s *store) list(ctx context.Context, orgID, status string, limit, offset in
 	return out, rows.Err()
 }
 
-func (s *store) count(ctx context.Context, orgID, status string) (int, error) {
+func (s *store) count(ctx context.Context, _, status string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM quotes
@@ -156,7 +156,7 @@ func (s *store) count(ctx context.Context, orgID, status string) (int, error) {
 	return n, err
 }
 
-func (s *store) get(ctx context.Context, orgID, id string) (Quote, error) {
+func (s *store) get(ctx context.Context, _, id string) (Quote, error) {
 	q, err := scanQuote(s.pool.QueryRow(ctx,
 		`SELECT `+quoteColumns+quoteFrom+`WHERE q.id = $1 AND q.deleted_at IS NULL`, id))
 	if err != nil {
@@ -206,7 +206,7 @@ func (s *store) create(ctx context.Context, orgID, currency string, in Input) (s
 	var id string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO quotes
-		   (deal_id, company_id, status, current_version, created_by, valid_until)
+		   (deal_id, account_id, status, current_version, created_by, valid_until)
 		 VALUES ($1, $2, 'draft', 1,
 		         (SELECT id FROM profiles WHERE id = $3::uuid), $4)
 		 RETURNING id::text`,
@@ -300,7 +300,7 @@ func replaceItems(ctx context.Context, tx pgx.Tx, orgID, quoteID string, items [
 //
 // Totals are never accepted from a client — a quote whose stated total disagreed
 // with its lines would be a document you cannot defend.
-func recalculate(ctx context.Context, tx pgx.Tx, orgID, quoteID string) error {
+func recalculate(ctx context.Context, tx pgx.Tx, _, quoteID string) error {
 	_, err := tx.Exec(ctx,
 		`WITH t AS (
 		   SELECT
@@ -320,7 +320,7 @@ func recalculate(ctx context.Context, tx pgx.Tx, orgID, quoteID string) error {
 }
 
 // setStatus applies a lifecycle transition and stamps the matching timestamp.
-func (s *store) setStatus(ctx context.Context, orgID, id, from, to string) error {
+func (s *store) setStatus(ctx context.Context, _, id, from, to string) error {
 	// `status = $3` makes the transition atomic against a concurrent change: the
 	// caller's view of the current status has to still be true.
 	tag, err := s.pool.Exec(ctx,
@@ -340,7 +340,7 @@ func (s *store) setStatus(ctx context.Context, orgID, id, from, to string) error
 }
 
 // currentStatus reads the status for a transition check.
-func (s *store) currentStatus(ctx context.Context, orgID, id string) (string, error) {
+func (s *store) currentStatus(ctx context.Context, _, id string) (string, error) {
 	var status string
 	err := s.pool.QueryRow(ctx,
 		`SELECT status FROM quotes WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&status)
@@ -378,7 +378,7 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 }
 
 // refInOrg checks a client-supplied foreign key against the caller's org.
-func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
+func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error) {
 	if table == "accounts" {
 		table = "companies"
 	}
@@ -413,7 +413,7 @@ type Stats struct {
 	Value  float64 `json:"value"`
 }
 
-func (s *store) stats(ctx context.Context, orgID string) ([]Stats, error) {
+func (s *store) stats(ctx context.Context, _ string) ([]Stats, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT q.status, count(*), COALESCE(sum(v.total), 0)::float8
 		 FROM quotes q

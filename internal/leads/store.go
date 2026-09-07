@@ -148,7 +148,7 @@ const filterClause = `
 	       ($1 = 'open'      AND l.status NOT IN ('closed','not interested')) OR
 	       ($1 NOT IN ('overdue','due_today','open') AND l.status = $1))`
 
-func (s *store) list(ctx context.Context, orgID, filter string, limit, offset int) ([]Lead, error) {
+func (s *store) list(ctx context.Context, _, filter string, limit, offset int) ([]Lead, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+leadColumns+leadFrom+filterClause+urgencyOrder+`
 		 LIMIT $2 OFFSET $3`, filter, limit, offset)
@@ -168,7 +168,7 @@ func (s *store) list(ctx context.Context, orgID, filter string, limit, offset in
 	return out, rows.Err()
 }
 
-func (s *store) count(ctx context.Context, orgID, filter string) (int, error) {
+func (s *store) count(ctx context.Context, _, filter string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM leads l `+filterClause, filter).Scan(&n)
@@ -176,7 +176,7 @@ func (s *store) count(ctx context.Context, orgID, filter string) (int, error) {
 }
 
 // counts powers the funnel strip and the filter pills in one round-trip.
-func (s *store) counts(ctx context.Context, orgID string) (map[string]int, error) {
+func (s *store) counts(ctx context.Context, _ string) (map[string]int, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT status, count(*) FROM leads WHERE deleted_at IS NULL GROUP BY status
 		 UNION ALL
@@ -205,7 +205,7 @@ func (s *store) counts(ctx context.Context, orgID string) (map[string]int, error
 	return out, rows.Err()
 }
 
-func (s *store) get(ctx context.Context, orgID, id string) (Lead, error) {
+func (s *store) get(ctx context.Context, _, id string) (Lead, error) {
 	return scanLead(s.pool.QueryRow(ctx,
 		`SELECT `+leadColumns+leadFrom+`WHERE l.id = $1 AND l.deleted_at IS NULL`, id))
 }
@@ -214,7 +214,7 @@ func (s *store) get(ctx context.Context, orgID, id string) (Lead, error) {
 // company_id: an account is a company in this schema, so the accountId the client
 // sends is stored there. Only the last name and the free-text company fallback
 // have no column, and those are dropped.
-func (s *store) create(ctx context.Context, orgID string, in Input) (string, error) {
+func (s *store) create(ctx context.Context, _ string, in Input) (string, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO leads
@@ -230,7 +230,7 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (string, err
 	return id, translate(err)
 }
 
-func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
+func (s *store) update(ctx context.Context, _, id string, in Input) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
 		 SET contact_name = $2, job_title = $3, email = $4, phone = $5,
@@ -280,7 +280,7 @@ func (s *store) advance(
 	return nil
 }
 
-func (s *store) delete(ctx context.Context, orgID, id string) error {
+func (s *store) delete(ctx context.Context, _, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM leads WHERE id = $1`, id)
 	if err != nil {
 		return translate(err)
@@ -293,7 +293,7 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 
 // explainWriteMiss reports why an update matched no row. This schema keeps no
 // conversion trail, so a miss can only mean the lead is absent or soft-deleted.
-func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
+func (s *store) explainWriteMiss(ctx context.Context, _, id string) error {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM leads WHERE id = $1)`, id).Scan(&exists)
@@ -309,7 +309,7 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
 // existence is the only thing left to verify.
-func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
+func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error) {
 	if table == "accounts" {
 		table = "companies"
 	}
@@ -344,7 +344,7 @@ type Stats struct {
 	Value float64 `json:"value"`
 }
 
-func (s *store) stats(ctx context.Context, orgID string) ([]Stats, error) {
+func (s *store) stats(ctx context.Context, _ string) ([]Stats, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT status, count(*), COALESCE(sum(value_estimate), 0)::float8
 		 FROM leads WHERE deleted_at IS NULL GROUP BY status`)
