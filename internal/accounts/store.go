@@ -429,7 +429,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	dRows, err := s.pool.Query(ctx,
 		`SELECT id::text, title, stage, amount, probability, site_assessment_date::text, site_assessment_location, expected_close_date::text, created_at
 		 FROM deals
-		 WHERE account_id = $1 AND deleted_at IS NULL
+		 WHERE company_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer dRows.Close()
@@ -446,7 +446,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	qRows, err := s.pool.Query(ctx,
 		`SELECT id::text, number, status, total, currency, current_version, valid_until::text, created_at
 		 FROM quotes
-		 WHERE account_id = $1 AND deleted_at IS NULL
+		 WHERE company_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer qRows.Close()
@@ -463,7 +463,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	iRows, err := s.pool.Query(ctx,
 		`SELECT id::text, invoice_number, title, status, total, amount_due, amount_paid, due_date::text, created_at
 		 FROM invoices
-		 WHERE account_id = $1 AND deleted_at IS NULL
+		 WHERE company_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer iRows.Close()
@@ -480,7 +480,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	cRows, err := s.pool.Query(ctx,
 		`SELECT id::text, first_name, last_name, email, phone, title
 		 FROM contacts
-		 WHERE account_id = $1 AND deleted_at IS NULL
+		 WHERE company_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer cRows.Close()
@@ -497,7 +497,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	lRows, err := s.pool.Query(ctx,
 		`SELECT id::text, first_name, last_name, email, phone, title, stage, value, created_at
 		 FROM leads
-		 WHERE account_id = $1 AND deleted_at IS NULL
+		 WHERE company_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer lRows.Close()
