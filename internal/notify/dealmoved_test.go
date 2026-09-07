@@ -22,7 +22,7 @@ func move() DealMove {
 		Title:      "Acme rollout",
 		FromStage:  "prospect",
 		ToStage:    "negotiation",
-		CompanyID:  "c1",
+		AccountID:  "c1",
 		Amount:     1250,
 		StageLabel: testLabel,
 	}

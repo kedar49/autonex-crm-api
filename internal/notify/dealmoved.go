@@ -27,7 +27,7 @@ type DealMove struct {
 	Title      string
 	FromStage  string
 	ToStage    string
-	CompanyID  string
+	AccountID  string
 	Amount     float64
 	ActorName  string
 	StageLabel func(string) string
@@ -88,7 +88,7 @@ func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv Deal
 		if len(to) == 0 {
 			return
 		}
-		company, currency := n.details(sendCtx, orgID, mv.CompanyID)
+		company, currency := n.details(sendCtx, orgID, mv.AccountID)
 		if err := n.mail.Send(sendCtx, mailer.Message{
 			To:      to,
 			Subject: dealMovedSubject(mv),
@@ -141,7 +141,7 @@ func dealMovedSubject(mv DealMove) string {
 func (n *Notifier) details(ctx context.Context, orgID, companyID string) (company, currency string) {
 	currency = "USD"
 	err := n.pool.QueryRow(ctx,
-		`SELECT COALESCE((SELECT name FROM companies WHERE id = $2::uuid), ''),
+		`SELECT COALESCE((SELECT name FROM accounts WHERE id = $2::uuid), ''),
 		        COALESCE((SELECT currency FROM organizations WHERE id = $1), 'USD')`,
 		orgID, nilIfEmpty(companyID)).Scan(&company, &currency)
 	if err != nil {

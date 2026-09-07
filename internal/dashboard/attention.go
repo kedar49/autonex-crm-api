@@ -53,7 +53,7 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 		         (l.next_follow_up_date - CURRENT_DATE)::int AS days,
 		         coalesce(l.value_estimate, 0)::float8       AS amount
 		    FROM leads l
-		    LEFT JOIN companies a ON a.id = l.company_id
+		    LEFT JOIN accounts a ON a.id = l.account_id
 		   WHERE l.deleted_at IS NULL
 		     AND l.status NOT IN ('closed', 'not interested')
 		     AND l.next_follow_up_date IS NOT NULL
@@ -69,7 +69,7 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 		         (q.valid_until - CURRENT_DATE)::int,
 		         coalesce(v.total, 0)::float8
 		    FROM quotes q
-		    LEFT JOIN companies      ac ON ac.id = q.company_id
+		    LEFT JOIN accounts      ac ON ac.id = q.account_id
 		    LEFT JOIN deals          d  ON d.id  = q.deal_id
 		    LEFT JOIN quote_versions v  ON v.quote_id = q.id AND v.is_current
 		   WHERE q.deleted_at IS NULL
@@ -86,7 +86,7 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 		         (i.due_date - CURRENT_DATE)::int,
 		         (i.amount_due - paid.amt)::float8
 		    FROM invoices i
-		    LEFT JOIN companies ac ON ac.id = i.company_id
+		    LEFT JOIN accounts ac ON ac.id = i.account_id
 		    CROSS JOIN LATERAL (
 		      SELECT COALESCE(sum(amount), 0) AS amt
 		        FROM payments pm

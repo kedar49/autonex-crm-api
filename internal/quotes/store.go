@@ -97,7 +97,7 @@ const quoteColumns = `
 	d.title                                 AS title,
 	q.status,
 	COALESCE(v.currency, 'USD')             AS currency,
-	q.company_id::text                      AS account_id,
+	q.account_id::text                      AS account_id,
 	a.name                                  AS account_name,
 	NULL::text                              AS contact_id,
 	NULL::text                              AS contact_name,
@@ -119,7 +119,7 @@ const quoteColumns = `
 
 const quoteFrom = `
 	FROM quotes q
-	LEFT JOIN companies      a ON a.id = q.company_id
+	LEFT JOIN accounts      a ON a.id = q.account_id
 	LEFT JOIN deals          d ON d.id = q.deal_id
 	LEFT JOIN profiles       p ON p.id = q.created_by
 	LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current `
@@ -248,7 +248,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	var status string
 	err = tx.QueryRow(ctx,
 		`UPDATE quotes
-		 SET deal_id = $2, company_id = $3, valid_until = $4, updated_at = now()
+		 SET deal_id = $2, account_id = $3, valid_until = $4, updated_at = now()
 		 WHERE id = $1 AND status = 'draft'
 		 RETURNING status`,
 		id, in.DealID, in.AccountID, in.ValidUntil).Scan(&status)

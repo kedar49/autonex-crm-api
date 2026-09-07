@@ -2,8 +2,8 @@
 // here is a company the tenant sells to — not the tenant itself, which is an
 // organization (see EXPLAINER §13).
 //
-// In this deployment the companies a lead or deal belongs to live in the
-// `companies` table: contacts.company_id, deals.company_id and leads.company_id
+// In this deployment the accounts a lead or deal belongs to live in the
+// `accounts` table: contacts.account_id, deals.account_id and leads.account_id
 // all point there, and it holds the real data. The vestigial `accounts` table is
 // not used. This module therefore reads and writes `companies`, which is also
 // what makes the per-account contact and deal counts meaningful.
@@ -81,10 +81,10 @@ const accountColumns = `
 	p.full_name       AS owner_name,
 	NULL::text        AS owner_email,
 	a.created_at, a.updated_at,
-	(SELECT count(*) FROM contacts c WHERE c.company_id = a.id AND c.deleted_at IS NULL),
-	(SELECT count(*) FROM deals    d WHERE d.company_id = a.id AND d.deleted_at IS NULL)`
+	(SELECT count(*) FROM contacts c WHERE c.account_id = a.id AND c.deleted_at IS NULL),
+	(SELECT count(*) FROM deals    d WHERE d.account_id = a.id AND d.deleted_at IS NULL)`
 
-const accountFrom = ` FROM companies a LEFT JOIN profiles p ON p.id = a.owner_id `
+const accountFrom = ` FROM accounts a LEFT JOIN profiles p ON p.id = a.owner_id `
 
 func (s *store) list(ctx context.Context, _ string, limit, offset int) ([]Account, error) {
 	rows, err := s.pool.Query(ctx,
@@ -112,7 +112,7 @@ func (s *store) list(ctx context.Context, _ string, limit, offset int) ([]Accoun
 func (s *store) count(ctx context.Context, _ string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM companies WHERE deleted_at IS NULL`).Scan(&n)
+		`SELECT count(*) FROM accounts WHERE deleted_at IS NULL`).Scan(&n)
 	return n, err
 }
 
@@ -126,7 +126,7 @@ func (s *store) get(ctx context.Context, _, id string) (Account, error) {
 func (s *store) create(ctx context.Context, orgID string, in Input) (Account, error) {
 	var id string
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO companies (name, domain, industry, owner_id)
+		`INSERT INTO accounts (name, domain, industry, owner_id)
 		 VALUES ($1, $2, $3, $4)
 		 RETURNING id::text`,
 		in.Name, in.Website, in.Industry, in.OwnerUserID).Scan(&id)
@@ -163,8 +163,8 @@ func (s *store) delete(ctx context.Context, _, id string) error {
 
 	var contacts, deals int
 	if err := tx.QueryRow(ctx,
-		`SELECT (SELECT count(*) FROM contacts WHERE company_id = $1),
-		        (SELECT count(*) FROM deals    WHERE company_id = $1)`,
+		`SELECT (SELECT count(*) FROM contacts WHERE account_id = $1),
+		        (SELECT count(*) FROM deals    WHERE account_id = $1)`,
 		id).Scan(&contacts, &deals); err != nil {
 		return translate(err)
 	}
@@ -172,7 +172,7 @@ func (s *store) delete(ctx context.Context, _, id string) error {
 		return ErrInUse
 	}
 
-	tag, err := tx.Exec(ctx, `DELETE FROM companies WHERE id = $1`, id)
+	tag, err := tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1`, id)
 	if err != nil {
 		return translate(err)
 	}
@@ -254,7 +254,7 @@ type CustomSection struct {
 }
 
 type CompanyProfile struct {
-	CompanyID      string          `json:"companyId"`
+	AccountID      string          `json:"companyId"`
 	Tagline        *string         `json:"tagline"`
 	Description    *string         `json:"description"`
 	PrimaryColor   string          `json:"primaryColor"`
@@ -365,7 +365,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	}
 
 	prof := CompanyProfile{
-		CompanyID:      companyID,
+		AccountID:      companyID,
 		PrimaryColor:   "#6366f1",
 		PlantLocations: []PlantLocation{},
 		AIDetections:   []string{},
@@ -381,12 +381,12 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	var amcVal *float64
 
 	row := s.pool.QueryRow(ctx,
-		`SELECT company_id::text, tagline, description, primary_color, banner_url,
+		`SELECT account_id::text, tagline, description, primary_color, banner_url,
 		        plant_locations, ai_detections, hardware_specs, amc_status,
 		        amc_start_date::text, amc_end_date::text, amc_value, custom_sections,
 		        created_at, updated_at
-		 FROM company_profiles
-		 WHERE company_id = $1`, companyID)
+		 FROM account_profiles
+		 WHERE account_id = $1`, companyID)
 
 	var pID string
 	err = row.Scan(
@@ -429,7 +429,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	dRows, err := s.pool.Query(ctx,
 		`SELECT id::text, title, stage, amount, probability, site_assessment_date::text, site_assessment_location, expected_close_date::text, created_at
 		 FROM deals
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer dRows.Close()
@@ -446,7 +446,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	qRows, err := s.pool.Query(ctx,
 		`SELECT id::text, number, status, total, currency, current_version, valid_until::text, created_at
 		 FROM quotes
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer qRows.Close()
@@ -463,7 +463,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	iRows, err := s.pool.Query(ctx,
 		`SELECT id::text, invoice_number, title, status, total, amount_due, amount_paid, due_date::text, created_at
 		 FROM invoices
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer iRows.Close()
@@ -480,7 +480,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	cRows, err := s.pool.Query(ctx,
 		`SELECT id::text, first_name, last_name, email, phone, title
 		 FROM contacts
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer cRows.Close()
@@ -497,7 +497,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	lRows, err := s.pool.Query(ctx,
 		`SELECT id::text, first_name, last_name, email, phone, title, stage, value, created_at
 		 FROM leads
-		 WHERE company_id = $1 AND deleted_at IS NULL
+		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
 	if err == nil {
 		defer lRows.Close()
@@ -559,8 +559,8 @@ func (s *store) upsertProfile(ctx context.Context, orgID, companyID string, in P
 	}
 
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO company_profiles (
-			company_id, tagline, description, primary_color, banner_url,
+		`INSERT INTO account_profiles (
+			account_id, tagline, description, primary_color, banner_url,
 			plant_locations, ai_detections, hardware_specs, amc_status,
 			amc_start_date, amc_end_date, amc_value, custom_sections, updated_at
 		 ) VALUES (
@@ -568,7 +568,7 @@ func (s *store) upsertProfile(ctx context.Context, orgID, companyID string, in P
 			$6, $7, $8, $9,
 			$10, $11, $12, $13, now()
 		 )
-		 ON CONFLICT (company_id) DO UPDATE SET
+		 ON CONFLICT (account_id) DO UPDATE SET
 			tagline = EXCLUDED.tagline,
 			description = EXCLUDED.description,
 			primary_color = EXCLUDED.primary_color,

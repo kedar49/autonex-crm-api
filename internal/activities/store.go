@@ -97,7 +97,7 @@ const activityFrom = `
 	FROM activities a
 	LEFT JOIN leads     l   ON a.entity_type = 'lead'    AND l.id   = a.entity_id
 	LEFT JOIN deals     d   ON a.entity_type = 'deal'    AND d.id   = a.entity_id
-	LEFT JOIN companies acc ON a.entity_type = 'company' AND acc.id = a.entity_id
+	LEFT JOIN accounts acc ON a.entity_type = 'company' AND acc.id = a.entity_id
 	LEFT JOIN contacts  c   ON a.entity_type = 'contact' AND c.id   = a.entity_id
 	LEFT JOIN profiles  p   ON p.id = a.author_id `
 

@@ -9,16 +9,39 @@ import (
 )
 
 type Account struct {
-	ID          pgtype.UUID        `json:"id"`
-	OrgID       pgtype.UUID        `json:"org_id"`
-	Name        string             `json:"name"`
-	Website     *string            `json:"website"`
-	Industry    *string            `json:"industry"`
-	Phone       *string            `json:"phone"`
-	Notes       *string            `json:"notes"`
-	OwnerUserID pgtype.UUID        `json:"owner_user_id"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID         pgtype.UUID        `json:"id"`
+	OrgID      pgtype.UUID        `json:"org_id"`
+	Name       string             `json:"name"`
+	Domain     *string            `json:"domain"`
+	Industry   *string            `json:"industry"`
+	City       *string            `json:"city"`
+	Website    *string            `json:"website"`
+	Source     *string            `json:"source"`
+	Tags       []string           `json:"tags"`
+	LogoPath   *string            `json:"logo_path"`
+	OwnerID    pgtype.UUID        `json:"owner_id"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
+	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AccountProfile struct {
+	AccountID      pgtype.UUID        `json:"account_id"`
+	Tagline        *string            `json:"tagline"`
+	Description    *string            `json:"description"`
+	PrimaryColor   *string            `json:"primary_color"`
+	BannerUrl      *string            `json:"banner_url"`
+	PlantLocations []byte             `json:"plant_locations"`
+	AiDetections   []string           `json:"ai_detections"`
+	HardwareSpecs  []byte             `json:"hardware_specs"`
+	AmcStatus      string             `json:"amc_status"`
+	AmcStartDate   pgtype.Date        `json:"amc_start_date"`
+	AmcEndDate     pgtype.Date        `json:"amc_end_date"`
+	AmcValue       pgtype.Numeric     `json:"amc_value"`
+	CustomSections []byte             `json:"custom_sections"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Activity struct {
@@ -68,28 +91,9 @@ type CalendarEvent struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
-type Company struct {
-	ID         pgtype.UUID        `json:"id"`
-	OrgID      pgtype.UUID        `json:"org_id"`
-	Name       string             `json:"name"`
-	Domain     *string            `json:"domain"`
-	Industry   *string            `json:"industry"`
-	City       *string            `json:"city"`
-	Website    *string            `json:"website"`
-	Source     *string            `json:"source"`
-	Tags       []string           `json:"tags"`
-	LogoPath   *string            `json:"logo_path"`
-	OwnerID    pgtype.UUID        `json:"owner_id"`
-	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
-	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-}
-
 type Contact struct {
 	ID         pgtype.UUID        `json:"id"`
 	OrgID      pgtype.UUID        `json:"org_id"`
-	CompanyID  pgtype.UUID        `json:"company_id"`
 	AccountID  pgtype.UUID        `json:"account_id"`
 	FirstName  string             `json:"first_name"`
 	LastName   *string            `json:"last_name"`
@@ -107,7 +111,6 @@ type Deal struct {
 	OrgID                  pgtype.UUID        `json:"org_id"`
 	Title                  string             `json:"title"`
 	JobTitle               *string            `json:"job_title"`
-	CompanyID              pgtype.UUID        `json:"company_id"`
 	AccountID              pgtype.UUID        `json:"account_id"`
 	ContactID              pgtype.UUID        `json:"contact_id"`
 	PrimaryContactID       pgtype.UUID        `json:"primary_contact_id"`
@@ -181,7 +184,6 @@ type Invoice struct {
 	ID               pgtype.UUID        `json:"id"`
 	OrgID            pgtype.UUID        `json:"org_id"`
 	QuoteID          pgtype.UUID        `json:"quote_id"`
-	CompanyID        pgtype.UUID        `json:"company_id"`
 	AccountID        pgtype.UUID        `json:"account_id"`
 	ContactID        pgtype.UUID        `json:"contact_id"`
 	DealID           pgtype.UUID        `json:"deal_id"`
@@ -228,7 +230,6 @@ type Lead struct {
 	ID                 pgtype.UUID        `json:"id"`
 	OrgID              pgtype.UUID        `json:"org_id"`
 	AccountID          pgtype.UUID        `json:"account_id"`
-	CompanyID          pgtype.UUID        `json:"company_id"`
 	ContactID          pgtype.UUID        `json:"contact_id"`
 	Title              *string            `json:"title"`
 	FirstName          *string            `json:"first_name"`
@@ -259,6 +260,19 @@ type Lead struct {
 	ArchivedAt         pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Notification struct {
+	ID        pgtype.UUID        `json:"id"`
+	OrgID     string             `json:"org_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Type      string             `json:"type"`
+	Title     string             `json:"title"`
+	Body      string             `json:"body"`
+	ActionUrl *string            `json:"action_url"`
+	Priority  *string            `json:"priority"`
+	IsRead    *bool              `json:"is_read"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Organization struct {
@@ -312,12 +326,23 @@ type Profile struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PushSubscription struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	OrgID     string             `json:"org_id"`
+	Endpoint  string             `json:"endpoint"`
+	P256dh    string             `json:"p256dh"`
+	Auth      string             `json:"auth"`
+	UserAgent *string            `json:"user_agent"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Quote struct {
 	ID             pgtype.UUID        `json:"id"`
 	OrgID          pgtype.UUID        `json:"org_id"`
 	Number         *string            `json:"number"`
 	DealID         pgtype.UUID        `json:"deal_id"`
-	CompanyID      pgtype.UUID        `json:"company_id"`
 	AccountID      pgtype.UUID        `json:"account_id"`
 	ContactID      pgtype.UUID        `json:"contact_id"`
 	OwnerUserID    pgtype.UUID        `json:"owner_user_id"`

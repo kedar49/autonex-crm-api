@@ -127,7 +127,7 @@ func (q *Queries) DeleteDeal(ctx context.Context, arg DeleteDealParams) (int64, 
 }
 
 const getDeal = `-- name: GetDeal :one
-SELECT d.id, d.org_id, d.title, d.job_title, d.company_id, d.account_id, d.contact_id, d.primary_contact_id, d.lead_id, d.stage, d.position, d.amount, d.description, d.product_use_case, d.probability, d.next_action, d.site_assessment_date, d.site_assessment_location, d.site_assessment_notes, d.lost_reason, d.notes, d.owner_id, d.owner_user_id, d.expected_close_date, d.deleted_at, d.created_at, d.updated_at, u.name AS owner_name, u.email AS owner_email,
+SELECT d.id, d.org_id, d.title, d.job_title, d.account_id, d.contact_id, d.primary_contact_id, d.lead_id, d.stage, d.position, d.amount, d.description, d.product_use_case, d.probability, d.next_action, d.site_assessment_date, d.site_assessment_location, d.site_assessment_notes, d.lost_reason, d.notes, d.owner_id, d.owner_user_id, d.expected_close_date, d.deleted_at, d.created_at, d.updated_at, u.name AS owner_name, u.email AS owner_email,
        NULLIF(concat_ws(' ', c.first_name, c.last_name), '') AS contact_name
 FROM deals d
 LEFT JOIN users u ON u.id = d.owner_user_id
@@ -145,7 +145,6 @@ type GetDealRow struct {
 	OrgID                  pgtype.UUID        `json:"org_id"`
 	Title                  string             `json:"title"`
 	JobTitle               *string            `json:"job_title"`
-	CompanyID              pgtype.UUID        `json:"company_id"`
 	AccountID              pgtype.UUID        `json:"account_id"`
 	ContactID              pgtype.UUID        `json:"contact_id"`
 	PrimaryContactID       pgtype.UUID        `json:"primary_contact_id"`
@@ -181,7 +180,6 @@ func (q *Queries) GetDeal(ctx context.Context, arg GetDealParams) (GetDealRow, e
 		&i.OrgID,
 		&i.Title,
 		&i.JobTitle,
-		&i.CompanyID,
 		&i.AccountID,
 		&i.ContactID,
 		&i.PrimaryContactID,
@@ -213,7 +211,7 @@ func (q *Queries) GetDeal(ctx context.Context, arg GetDealParams) (GetDealRow, e
 
 const listDealsBoard = `-- name: ListDealsBoard :many
 
-SELECT d.id, d.org_id, d.title, d.job_title, d.company_id, d.account_id, d.contact_id, d.primary_contact_id, d.lead_id, d.stage, d.position, d.amount, d.description, d.product_use_case, d.probability, d.next_action, d.site_assessment_date, d.site_assessment_location, d.site_assessment_notes, d.lost_reason, d.notes, d.owner_id, d.owner_user_id, d.expected_close_date, d.deleted_at, d.created_at, d.updated_at, u.name AS owner_name, u.email AS owner_email,
+SELECT d.id, d.org_id, d.title, d.job_title, d.account_id, d.contact_id, d.primary_contact_id, d.lead_id, d.stage, d.position, d.amount, d.description, d.product_use_case, d.probability, d.next_action, d.site_assessment_date, d.site_assessment_location, d.site_assessment_notes, d.lost_reason, d.notes, d.owner_id, d.owner_user_id, d.expected_close_date, d.deleted_at, d.created_at, d.updated_at, u.name AS owner_name, u.email AS owner_email,
        NULLIF(concat_ws(' ', c.first_name, c.last_name), '') AS contact_name
 FROM deals d
 LEFT JOIN users u ON u.id = d.owner_user_id
@@ -233,7 +231,6 @@ type ListDealsBoardRow struct {
 	OrgID                  pgtype.UUID        `json:"org_id"`
 	Title                  string             `json:"title"`
 	JobTitle               *string            `json:"job_title"`
-	CompanyID              pgtype.UUID        `json:"company_id"`
 	AccountID              pgtype.UUID        `json:"account_id"`
 	ContactID              pgtype.UUID        `json:"contact_id"`
 	PrimaryContactID       pgtype.UUID        `json:"primary_contact_id"`
@@ -277,7 +274,6 @@ func (q *Queries) ListDealsBoard(ctx context.Context, arg ListDealsBoardParams) 
 			&i.OrgID,
 			&i.Title,
 			&i.JobTitle,
-			&i.CompanyID,
 			&i.AccountID,
 			&i.ContactID,
 			&i.PrimaryContactID,

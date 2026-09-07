@@ -67,7 +67,7 @@ func TestStatusesMatchTheCheckConstraint(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	// company_id is NOT NULL in the database, so it is required here; every case
+	// account_id is NOT NULL in the database, so it is required here; every case
 	// below carries one unless it is the case being tested.
 	company := ptr("company-id")
 

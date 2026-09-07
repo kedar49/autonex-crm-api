@@ -49,9 +49,9 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
-// A contact's company is company_id in this schema; it is aliased to the
+// A contact's company is account_id in this schema; it is aliased to the
 // account_id position so the scan order and JSON contract are unchanged.
-const contactColumns = `id::text, first_name, last_name, email, phone, company_id::text, created_at`
+const contactColumns = `id::text, first_name, last_name, email, phone, account_id::text, created_at`
 
 func (s *store) list(ctx context.Context, orgID string, limit, offset int) ([]Contact, error) {
 	rows, err := s.pool.Query(ctx,
@@ -92,7 +92,7 @@ func (s *store) get(ctx context.Context, orgID, id string) (Contact, error) {
 
 func (s *store) create(ctx context.Context, orgID string, in Input) (Contact, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO contacts (first_name, last_name, email, phone, company_id)
+		`INSERT INTO contacts (first_name, last_name, email, phone, account_id)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING `+contactColumns,
 		in.FirstName, in.LastName, in.Email, in.Phone, in.AccountID)
@@ -103,7 +103,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Contact
 	row := s.pool.QueryRow(ctx,
 		`UPDATE contacts
 		 SET first_name = $2, last_name = $3, email = $4, phone = $5,
-		     company_id = $6, updated_at = now()
+		     account_id = $6, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL
 		 RETURNING `+contactColumns,
 		id, in.FirstName, in.LastName, in.Email, in.Phone, in.AccountID)
@@ -124,13 +124,13 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 	return nil
 }
 
-// accountInOrg reports whether the company exists. Accounts are companies in
+// accountInOrg reports whether the company exists. Accounts are accounts in
 // this schema and the deployment is single-tenant, so existence is the whole
 // check.
 func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM companies WHERE id = $1)`,
+		`SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)`,
 		accountID).Scan(&exists)
 	if err != nil {
 		if isPgCode(err, pgInvalidTextRepr) {

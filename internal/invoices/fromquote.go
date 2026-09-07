@@ -55,7 +55,7 @@ func (s *store) fromQuote(
 	)
 	err = tx.QueryRow(ctx,
 		`SELECT q.status, COALESCE(v.currency, 'USD'),
-		        q.company_id::text, q.created_by::text
+		        q.account_id::text, q.created_by::text
 		   FROM quotes q
 		   LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current
 		  WHERE q.id = $1 AND q.deleted_at IS NULL
@@ -87,7 +87,7 @@ func (s *store) fromQuote(
 	var id string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO invoices
-		   (invoice_number, status, currency, quote_id, company_id,
+		   (invoice_number, status, currency, quote_id, account_id,
 		    account_manager_id, due_date, amount_due)
 		 VALUES ($1, 'draft', $2, $3, $4,
 		         (SELECT id FROM profiles WHERE id = $5::uuid), $6, 0)

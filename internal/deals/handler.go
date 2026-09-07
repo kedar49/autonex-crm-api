@@ -120,7 +120,7 @@ func (h *Handler) move(w http.ResponseWriter, r *http.Request) {
 		Title:      deal.Title,
 		FromStage:  previous,
 		ToStage:    deal.Stage,
-		CompanyID:  deref(deal.AccountID),
+		AccountID:  deref(deal.AccountID),
 		Amount:     deal.Amount,
 		StageLabel: StageLabel,
 	})

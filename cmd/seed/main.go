@@ -77,12 +77,12 @@ func main() {
 	}
 
 	// 3. Company (Account)
-	var companyID string
+	var accountID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO companies (org_id, name, domain, industry, city, website, owner_id)
+		INSERT INTO accounts (org_id, name, domain, industry, city, website, owner_id)
 		VALUES ($1::uuid, 'Stark Industries', 'stark.com', 'Technology', 'Los Angeles', 'https://stark.com', $2::uuid)
 		RETURNING id::text
-	`, orgID, userID).Scan(&companyID)
+	`, orgID, userID).Scan(&accountID)
 	if err != nil {
 		log.Fatalf("Failed to create company: %v", err)
 	}
@@ -90,10 +90,10 @@ func main() {
 	// 4. Contact
 	var contactID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO contacts (org_id, company_id, first_name, last_name, email, phone, title)
+		INSERT INTO contacts (org_id, account_id, first_name, last_name, email, phone, title)
 		VALUES ($1::uuid, $2::uuid, 'Tony', 'Stark', 'tony@stark.com', '+1-555-0199', 'CEO')
 		RETURNING id::text
-	`, orgID, companyID).Scan(&contactID)
+	`, orgID, accountID).Scan(&contactID)
 	if err != nil {
 		log.Fatalf("Failed to create contact: %v", err)
 	}
@@ -102,7 +102,7 @@ func main() {
 	var leadID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO leads (
-			org_id, company_id, contact_id, first_name, last_name, company,
+			org_id, account_id, contact_id, first_name, last_name, company,
 			contact_name, email, phone, stage, status, assigned_to, value
 		)
 		VALUES (
@@ -110,7 +110,7 @@ func main() {
 			'Pepper Potts', 'pepper@stark.com', '+1-555-0198', 'initial count', 'new', $4::uuid, 75000.00
 		)
 		RETURNING id::text
-	`, orgID, companyID, contactID, userID).Scan(&leadID)
+	`, orgID, accountID, contactID, userID).Scan(&leadID)
 	if err != nil {
 		log.Fatalf("Failed to create lead: %v", err)
 	}
@@ -119,13 +119,13 @@ func main() {
 	var dealID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO deals (
-			org_id, company_id, contact_id, lead_id, title, stage, amount, owner_id, expected_close_date
+			org_id, account_id, contact_id, lead_id, title, stage, amount, owner_id, expected_close_date
 		)
 		VALUES (
 			$1::uuid, $2::uuid, $3::uuid, $4::uuid, 'Arc Reactor Supply Deal', 'quote_sent', 250000.00, $5::uuid, $6
 		)
 		RETURNING id::text
-	`, orgID, companyID, contactID, leadID, userID, time.Now().AddDate(0, 1, 0)).Scan(&dealID)
+	`, orgID, accountID, contactID, leadID, userID, time.Now().AddDate(0, 1, 0)).Scan(&dealID)
 	if err != nil {
 		log.Fatalf("Failed to create deal: %v", err)
 	}
@@ -134,13 +134,13 @@ func main() {
 	var quoteID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO quotes (
-			org_id, deal_id, company_id, contact_id, owner_user_id, status, current_version, created_by, valid_until, currency, total
+			org_id, deal_id, account_id, contact_id, owner_user_id, status, current_version, created_by, valid_until, currency, total
 		)
 		VALUES (
 			$1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, 'draft', 1, $5::uuid, $6, 'USD', 250000.00
 		)
 		RETURNING id::text
-	`, orgID, dealID, companyID, contactID, userID, time.Now().AddDate(0, 0, 30)).Scan(&quoteID)
+	`, orgID, dealID, accountID, contactID, userID, time.Now().AddDate(0, 0, 30)).Scan(&quoteID)
 	if err != nil {
 		log.Fatalf("Failed to create quote: %v", err)
 	}
@@ -166,7 +166,7 @@ func main() {
 	invNumber := fmt.Sprintf("INV-%d", time.Now().Unix())
 	err = tx.QueryRow(ctx, `
 		INSERT INTO invoices (
-			org_id, quote_id, company_id, contact_id, deal_id, owner_user_id,
+			org_id, quote_id, account_id, contact_id, deal_id, owner_user_id,
 			invoice_number, number, title, status, amount_due, currency, issue_date, due_date, total
 		)
 		VALUES (
@@ -174,7 +174,7 @@ func main() {
 			$7, $7, 'Arc Reactor Initial Deposit', 'draft', 250000.00, 'USD', CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days', 250000.00
 		)
 		RETURNING id::text
-	`, orgID, quoteID, companyID, contactID, dealID, userID, invNumber).Scan(&invoiceID)
+	`, orgID, quoteID, accountID, contactID, dealID, userID, invNumber).Scan(&invoiceID)
 	if err != nil {
 		log.Fatalf("Failed to create invoice: %v", err)
 	}
@@ -190,8 +190,8 @@ func main() {
 	// 9. Activity
 	_, err = tx.Exec(ctx, `
 		INSERT INTO activities (entity_type, entity_id, type, body, occurred_at, author_id)
-		VALUES ('company', $1::uuid, 'note', 'Initial introduction call completed with Tony Stark.', now(), $2::uuid)
-	`, companyID, userID)
+		VALUES ('account', $1::uuid, 'note', 'Initial introduction call completed with Tony Stark.', now(), $2::uuid)
+	`, accountID, userID)
 	if err != nil {
 		log.Fatalf("Failed to create activity: %v", err)
 	}
@@ -201,6 +201,6 @@ func main() {
 	}
 
 	fmt.Println("Seed completed successfully!")
-	fmt.Printf("Created Records:\n  Org ID: %s\n  User ID: %s\n  Company ID: %s\n  Contact ID: %s\n  Lead ID: %s\n  Deal ID: %s\n  Quote ID: %s\n  Invoice ID: %s\n",
-		orgID, userID, companyID, contactID, leadID, dealID, quoteID, invoiceID)
+	fmt.Printf("Created Records:\n  Org ID: %s\n  User ID: %s\n  Account ID: %s\n  Contact ID: %s\n  Lead ID: %s\n  Deal ID: %s\n  Quote ID: %s\n  Invoice ID: %s\n",
+		orgID, userID, accountID, contactID, leadID, dealID, quoteID, invoiceID)
 }

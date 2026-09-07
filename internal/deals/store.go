@@ -68,7 +68,7 @@ const dealColumns = `
 	NULL::text                 AS owner_email,
 	d.primary_contact_id::text AS contact_id,
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
-	d.company_id::text         AS account_id,
+	d.account_id::text         AS account_id,
 	d.expected_close_date,
 	(row_number() OVER (PARTITION BY d.stage ORDER BY d.created_at, d.id) * 1000)::float8,
 	d.created_at, d.updated_at`
@@ -105,7 +105,7 @@ func (s *store) get(ctx context.Context, _ string, id string) (Deal, error) {
 		`SELECT `+dealColumns+dealFrom+`WHERE d.id = $1 AND d.deleted_at IS NULL`, id))
 }
 
-// create adds the deal to its stage. The account link is company_id: an account
+// create adds the deal to its stage. The account link is account_id: an account
 // is a company in this schema, so the accountId the client sends is stored
 // there.
 func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error) {

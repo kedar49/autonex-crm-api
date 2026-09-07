@@ -105,7 +105,7 @@ func TestNormalizeKeepsAPricedLineWithoutADescription(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
-	// company_id and created_by are NOT NULL in the database, so both are
+	// account_id and created_by are NOT NULL in the database, so both are
 	// required here; every case below carries them unless it is the one being
 	// tested.
 	company, owner := ptr("company-id"), ptr("owner-id")

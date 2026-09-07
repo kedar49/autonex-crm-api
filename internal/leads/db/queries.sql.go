@@ -119,7 +119,7 @@ func (q *Queries) DeleteLead(ctx context.Context, arg DeleteLeadParams) (int64, 
 }
 
 const getLead = `-- name: GetLead :one
-SELECT l.id, l.org_id, l.account_id, l.company_id, l.contact_id, l.title, l.first_name, l.last_name, l.company, l.contact_name, l.job_title, l.email, l.phone, l.linkedin_url, l.industry, l.location, l.product_interest, l.source, l.status, l.stage, l.assigned_to, l.owner_user_id, l.value_estimate, l.value, l.next_follow_up_date, l.follow_up_at, l.notes, l.converted_at, l.converted_deal_id, l.converted_contact_id, l.deleted_at, l.archived_at, l.created_at, l.updated_at, u.name AS owner_name, u.email AS owner_email
+SELECT l.id, l.org_id, l.account_id, l.contact_id, l.title, l.first_name, l.last_name, l.company, l.contact_name, l.job_title, l.email, l.phone, l.linkedin_url, l.industry, l.location, l.product_interest, l.source, l.status, l.stage, l.assigned_to, l.owner_user_id, l.value_estimate, l.value, l.next_follow_up_date, l.follow_up_at, l.notes, l.converted_at, l.converted_deal_id, l.converted_contact_id, l.deleted_at, l.archived_at, l.created_at, l.updated_at, u.name AS owner_name, u.email AS owner_email
 FROM leads l
 LEFT JOIN users u ON u.id = l.owner_user_id
 WHERE l.org_id = $1 AND l.id = $2
@@ -134,7 +134,6 @@ type GetLeadRow struct {
 	ID                 pgtype.UUID        `json:"id"`
 	OrgID              pgtype.UUID        `json:"org_id"`
 	AccountID          pgtype.UUID        `json:"account_id"`
-	CompanyID          pgtype.UUID        `json:"company_id"`
 	ContactID          pgtype.UUID        `json:"contact_id"`
 	Title              *string            `json:"title"`
 	FirstName          *string            `json:"first_name"`
@@ -176,7 +175,6 @@ func (q *Queries) GetLead(ctx context.Context, arg GetLeadParams) (GetLeadRow, e
 		&i.ID,
 		&i.OrgID,
 		&i.AccountID,
-		&i.CompanyID,
 		&i.ContactID,
 		&i.Title,
 		&i.FirstName,
@@ -268,7 +266,7 @@ func (q *Queries) LinkConversion(ctx context.Context, arg LinkConversionParams) 
 
 const listLeadsBoard = `-- name: ListLeadsBoard :many
 
-SELECT l.id, l.org_id, l.account_id, l.company_id, l.contact_id, l.title, l.first_name, l.last_name, l.company, l.contact_name, l.job_title, l.email, l.phone, l.linkedin_url, l.industry, l.location, l.product_interest, l.source, l.status, l.stage, l.assigned_to, l.owner_user_id, l.value_estimate, l.value, l.next_follow_up_date, l.follow_up_at, l.notes, l.converted_at, l.converted_deal_id, l.converted_contact_id, l.deleted_at, l.archived_at, l.created_at, l.updated_at, u.name AS owner_name, u.email AS owner_email
+SELECT l.id, l.org_id, l.account_id, l.contact_id, l.title, l.first_name, l.last_name, l.company, l.contact_name, l.job_title, l.email, l.phone, l.linkedin_url, l.industry, l.location, l.product_interest, l.source, l.status, l.stage, l.assigned_to, l.owner_user_id, l.value_estimate, l.value, l.next_follow_up_date, l.follow_up_at, l.notes, l.converted_at, l.converted_deal_id, l.converted_contact_id, l.deleted_at, l.archived_at, l.created_at, l.updated_at, u.name AS owner_name, u.email AS owner_email
 FROM leads l
 LEFT JOIN users u ON u.id = l.owner_user_id
 WHERE l.org_id = $1
@@ -285,7 +283,6 @@ type ListLeadsBoardRow struct {
 	ID                 pgtype.UUID        `json:"id"`
 	OrgID              pgtype.UUID        `json:"org_id"`
 	AccountID          pgtype.UUID        `json:"account_id"`
-	CompanyID          pgtype.UUID        `json:"company_id"`
 	ContactID          pgtype.UUID        `json:"contact_id"`
 	Title              *string            `json:"title"`
 	FirstName          *string            `json:"first_name"`
@@ -335,7 +332,6 @@ func (q *Queries) ListLeadsBoard(ctx context.Context, arg ListLeadsBoardParams) 
 			&i.ID,
 			&i.OrgID,
 			&i.AccountID,
-			&i.CompanyID,
 			&i.ContactID,
 			&i.Title,
 			&i.FirstName,

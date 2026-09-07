@@ -88,7 +88,7 @@ const leadColumns = `
 	l.email, l.phone, l.linkedin_url, l.source, l.notes,
 	l.value_estimate                   AS value,
 	l.status                           AS stage,
-	l.company_id::text                 AS account_id,
+	l.account_id::text                 AS account_id,
 	c.name                             AS account_name,
 	c.industry                         AS account_industry,
 	c.name                             AS company,
@@ -114,7 +114,7 @@ const leadColumns = `
 
 const leadFrom = `
 	FROM leads l
-	LEFT JOIN companies c ON c.id = l.company_id
+	LEFT JOIN accounts c ON c.id = l.account_id
 	LEFT JOIN profiles  p ON p.id = l.assigned_to `
 
 // urgencyOrder is the brief's "default sort by urgency": anything with a due
@@ -211,7 +211,7 @@ func (s *store) get(ctx context.Context, _, id string) (Lead, error) {
 }
 
 // create writes the fields this database has a home for. The account link is
-// company_id: an account is a company in this schema, so the accountId the client
+// account_id: an account is a company in this schema, so the accountId the client
 // sends is stored there. Only the last name and the free-text company fallback
 // have no column, and those are dropped.
 func (s *store) create(ctx context.Context, _ string, in Input) (string, error) {
@@ -219,7 +219,7 @@ func (s *store) create(ctx context.Context, _ string, in Input) (string, error) 
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO leads
 		   (contact_name, job_title, email, phone, linkedin_url, contact_id,
-		    company_id, source, notes, value_estimate, status, assigned_to,
+		    account_id, source, notes, value_estimate, status, assigned_to,
 		    next_follow_up_date)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::date)
 		 RETURNING id::text`,
@@ -234,7 +234,7 @@ func (s *store) update(ctx context.Context, _, id string, in Input) error {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
 		 SET contact_name = $2, job_title = $3, email = $4, phone = $5,
-		     linkedin_url = $6, contact_id = $7, company_id = $8, source = $9,
+		     linkedin_url = $6, contact_id = $7, account_id = $8, source = $9,
 		     notes = $10, value_estimate = $11, status = $12, assigned_to = $13,
 		     next_follow_up_date = $14::date, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,

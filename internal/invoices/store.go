@@ -124,7 +124,7 @@ const invoiceColumns = `
 	i.status, i.currency,
 	i.quote_id::text,
 	'Q-' || upper(substr(i.quote_id::text, 1, 8)) AS quote_number,
-	i.company_id::text                 AS account_id,
+	i.account_id::text                 AS account_id,
 	a.name                             AS account_name,
 	NULL::text                         AS contact_id,
 	NULL::text                         AS contact_name,
@@ -153,7 +153,7 @@ const invoiceColumns = `
 const invoiceFrom = `
 	FROM invoices i
 	LEFT JOIN quotes    q ON q.id = i.quote_id
-	LEFT JOIN companies a ON a.id = i.company_id
+	LEFT JOIN accounts a ON a.id = i.account_id
 	LEFT JOIN deals     d ON d.id = q.deal_id
 	LEFT JOIN profiles  p ON p.id = i.account_manager_id
 	CROSS JOIN LATERAL (
@@ -301,7 +301,7 @@ func (s *store) create(ctx context.Context, orgID, currency string, in Input) (s
 		// Title, notes, contact, deal and issue date have no column here and are
 		// dropped; the deal is reached through the originating quote instead.
 		`INSERT INTO invoices
-		   (invoice_number, status, currency, company_id, account_manager_id,
+		   (invoice_number, status, currency, account_id, account_manager_id,
 		    due_date, amount_due)
 		 VALUES ($1, 'draft', $2, $3,
 		         (SELECT id FROM profiles WHERE id = $4::uuid), $5, 0)
@@ -335,7 +335,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	var status string
 	err = tx.QueryRow(ctx,
 		`UPDATE invoices
-		 SET company_id = $2,
+		 SET account_id = $2,
 		     account_manager_id = (SELECT id FROM profiles WHERE id = $3::uuid),
 		     due_date = $4, updated_at = now()
 		 WHERE id = $1 AND status = 'draft' AND deleted_at IS NULL
