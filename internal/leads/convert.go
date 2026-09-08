@@ -46,7 +46,7 @@ const defaultDealStage = "discovery"
 // database CHECK constraint is the real enforcement either way.
 var validDealStages = map[string]bool{
 	"discovery": true, "site_assessment": true, "quote_sent": true,
-	"negotiation": true, "won": true, "lost": true,
+	"negotiation": true, "delivery": true, "won": true, "lost": true,
 }
 
 func normalizeDealStage(raw string) string {

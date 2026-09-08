@@ -35,13 +35,13 @@ func TestValidDealStagesMatchTheDealsPipeline(t *testing.T) {
 	// This map is a deliberate copy of deals.Stages (importing the deals package
 	// would make the two modules mutually dependent). If they drift, conversion
 	// starts rejecting valid stages — or worse, relying on the DB CHECK to fail.
-	for _, stage := range []string{"discovery", "site_assessment", "quote_sent", "negotiation", "won", "lost"} {
+	for _, stage := range []string{"discovery", "site_assessment", "quote_sent", "negotiation", "delivery", "won", "lost"} {
 		if !validDealStages[stage] {
 			t.Errorf("deal stage %q missing from validDealStages", stage)
 		}
 	}
-	if len(validDealStages) != 6 {
-		t.Errorf("len(validDealStages) = %d, want 6", len(validDealStages))
+	if len(validDealStages) != 7 {
+		t.Errorf("len(validDealStages) = %d, want 7", len(validDealStages))
 	}
 	// "contacted" is a lead stage; a deal must never accept it.
 	if validDealStages["contacted"] {

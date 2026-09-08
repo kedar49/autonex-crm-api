@@ -12,7 +12,7 @@ import (
 
 // Stages is the deal lifecycle, in board order. These are the values the
 // deployed database enforces through deals_stage_check.
-var Stages = []string{"discovery", "site_assessment", "quote_sent", "negotiation", "won", "lost"}
+var Stages = []string{"discovery", "site_assessment", "quote_sent", "negotiation", "delivery", "won", "lost"}
 
 // maxBoard caps a board fetch — well above a realistic pipeline, low enough that
 // one org can't pull the whole table into memory.
@@ -248,6 +248,8 @@ func StageLabel(stage string) string {
 		return "Quote sent"
 	case "negotiation":
 		return "Negotiation"
+	case "delivery":
+		return "Delivery"
 	case "won":
 		return "Won"
 	case "lost":

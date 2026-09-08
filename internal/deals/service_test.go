@@ -61,8 +61,8 @@ func TestStagesAreDistinctFromLeadStages(t *testing.T) {
 	// The two pipelines are intentionally different shapes. If they ever get
 	// unified, that should be a deliberate change with a migration behind it —
 	// not something that drifts in silently.
-	if len(Stages) != 6 {
-		t.Fatalf("len(Stages) = %d, want 6 — keep in sync with the CHECK constraint", len(Stages))
+	if len(Stages) != 7 {
+		t.Fatalf("len(Stages) = %d, want 7 — keep in sync with the CHECK constraint", len(Stages))
 	}
 	if ValidStage("deck sent") {
 		t.Error(`"deck sent" is a lead stage and must not be valid for a deal`)
