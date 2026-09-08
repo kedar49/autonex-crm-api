@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -194,17 +195,25 @@ func TestDiffIgnoresBlankIncomingCells(t *testing.T) {
 	}
 }
 
-// The DATE column comes back at midnight UTC and a parsed sheet date is midnight
-// local; comparing instants would report every unchanged date as a change.
+// Dates are compared by calendar day. A sheet value parsed in one zone and a
+// stored value read back in another are the same date, and reporting that as a
+// change would make every re-import look like it rewrites every row.
 func TestDiffComparesDatesByCalendarDay(t *testing.T) {
-	stored := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
-	sameDayElsewhere := time.Date(2026, 3, 14, 0, 0, 0, 0, time.FixedZone("IST", 5*3600+1800))
+	stored := NewDate(time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC))
+	sameDayElsewhere := NewDate(
+		time.Date(2026, 3, 14, 22, 15, 0, 0, time.FixedZone("IST", 5*3600+1800)))
 
 	existing := Row{Client: "Acme Steel", ImplementationDate: &stored}
 	in := Input{Client: "Acme Steel", ImplementationDate: &sameDayElsewhere}
 
 	if changes := diff(existing, in); len(changes) != 0 {
 		t.Errorf("changes = %v, want none — it is the same calendar day", changes)
+	}
+
+	moved := NewDate(time.Date(2026, 3, 20, 0, 0, 0, 0, time.UTC))
+	changes := diff(existing, Input{Client: "Acme Steel", ImplementationDate: &moved})
+	if len(changes) != 1 || changes[0] != "implementationDate" {
+		t.Errorf("changes = %v, want [implementationDate]", changes)
 	}
 }
 
@@ -223,5 +232,79 @@ func TestValidateRequiresClient(t *testing.T) {
 	// A cleared cell stores NULL, not "".
 	if got.Notes != nil {
 		t.Errorf("notes = %q, want nil for a whitespace-only cell", *got.Notes)
+	}
+}
+
+// The regression this type exists for: the browser's date input sends
+// "2026-09-08", and a *time.Time field rejected it with "expected an RFC 3339
+// timestamp" — so the date column could not be edited at all.
+func TestInputAcceptsBareDateFromDateInput(t *testing.T) {
+	var in Input
+	body := `{"client":"Acme Steel","products":null,"locations":null,"totalCameras":null,` +
+		`"status":null,"implementationDate":"2026-09-08","currentStages":null,` +
+		`"keyContacts":null,"nextSteps":null,"notes":null}`
+
+	if err := json.Unmarshal([]byte(body), &in); err != nil {
+		t.Fatalf("a bare YYYY-MM-DD must decode: %v", err)
+	}
+	if in.ImplementationDate == nil {
+		t.Fatal("implementationDate was dropped")
+	}
+	if got := in.ImplementationDate.Format("2006-01-02"); got != "2026-09-08" {
+		t.Errorf("date = %s, want 2026-09-08", got)
+	}
+}
+
+func TestDateJSONRoundTrip(t *testing.T) {
+	tests := map[string]string{
+		"bare date":      `"2026-09-08"`,
+		"rfc3339":        `"2026-09-08T00:00:00Z"`,
+		"rfc3339 offset": `"2026-09-08T09:30:00+05:30"`,
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			var d Date
+			if err := json.Unmarshal([]byte(raw), &d); err != nil {
+				t.Fatalf("unmarshal %s: %v", raw, err)
+			}
+			// Whatever came in, a date goes out — no time, no zone.
+			out, err := json.Marshal(d)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(out) != `"2026-09-08"` {
+				t.Errorf("marshalled %s, want \"2026-09-08\"", out)
+			}
+		})
+	}
+}
+
+// An empty string is how a cleared date input reports itself; it must mean NULL,
+// not a parse error the user cannot act on.
+func TestDateRejectsGarbageAndAcceptsEmpty(t *testing.T) {
+	var empty Input
+	if err := json.Unmarshal([]byte(`{"client":"x","implementationDate":""}`), &empty); err != nil {
+		t.Fatalf("an empty date must clear the cell, not fail: %v", err)
+	}
+
+	var bad Date
+	if err := json.Unmarshal([]byte(`"not-a-date"`), &bad); err == nil {
+		t.Error("garbage should be rejected with a message naming the format")
+	}
+}
+
+// Midnight UTC, so Postgres casting the bound value to DATE cannot land on the
+// day before in a westward session zone.
+func TestDateNormalizesToMidnightUTC(t *testing.T) {
+	d := NewDate(time.Date(2026, 9, 8, 23, 45, 0, 0, time.FixedZone("IST", 5*3600+1800)))
+
+	if h, m, s := d.Clock(); h != 0 || m != 0 || s != 0 {
+		t.Errorf("clock = %02d:%02d:%02d, want midnight", h, m, s)
+	}
+	if d.Location() != time.UTC {
+		t.Errorf("location = %v, want UTC", d.Location())
+	}
+	if got := d.Format("2006-01-02"); got != "2026-09-08" {
+		t.Errorf("date = %s, want 2026-09-08 (the calendar day, not a shifted one)", got)
 	}
 }

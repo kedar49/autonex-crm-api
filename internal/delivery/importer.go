@@ -396,7 +396,8 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 			if err != nil {
 				return Input{}, err
 			}
-			in.ImplementationDate = &d
+			parsed := NewDate(d)
+			in.ImplementationDate = &parsed
 		}
 	}
 	if strings.TrimSpace(in.Client) == "" {
@@ -472,8 +473,7 @@ func diff(existing Row, in Input) []string {
 	add("totalCameras", in.TotalCameras != nil &&
 		(existing.TotalCameras == nil || *existing.TotalCameras != *in.TotalCameras))
 	add("implementationDate", in.ImplementationDate != nil &&
-		(existing.ImplementationDate == nil ||
-			!sameDay(*existing.ImplementationDate, *in.ImplementationDate)))
+		!sameDate(existing.ImplementationDate, in.ImplementationDate))
 
 	return changes
 }
@@ -486,15 +486,6 @@ func changedText(existing, incoming *string) bool {
 		return true
 	}
 	return strings.TrimSpace(*existing) != strings.TrimSpace(*incoming)
-}
-
-// sameDay compares the calendar date only. The column is a DATE; pgx hands it
-// back at midnight UTC, and a parsed sheet date is midnight local, so comparing
-// instants would report every unchanged date as a change.
-func sameDay(a, b time.Time) bool {
-	ay, am, ad := a.Date()
-	by, bm, bd := b.Date()
-	return ay == by && am == bm && ad == bd
 }
 
 // clientKey is the identity an import upserts on, matching the unique index:

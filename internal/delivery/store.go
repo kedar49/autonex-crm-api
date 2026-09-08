@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -39,15 +40,20 @@ type scanner interface {
 
 func scanRow(s scanner) (Row, error) {
 	var r Row
+	// The driver knows how to read a DATE into a time.Time; Date is our own
+	// wire type, so the wrapping happens here rather than in a driver hook.
+	var implementationDate *time.Time
+
 	err := s.Scan(
 		&r.ID, &r.Client, &r.Products, &r.Locations, &r.TotalCameras, &r.Status,
-		&r.ImplementationDate, &r.CurrentStages, &r.KeyContacts, &r.NextSteps,
+		&implementationDate, &r.CurrentStages, &r.KeyContacts, &r.NextSteps,
 		&r.Notes, &r.Position, &r.UpdatedBy, &r.UpdatedByName,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Row{}, ErrNotFound
 	}
+	r.ImplementationDate = dateFromPtr(implementationDate)
 	return r, err
 }
 
@@ -90,7 +96,7 @@ func (s *store) create(ctx context.Context, orgID, userID string, in Input) (Row
 		 )
 		 SELECT `+rowColumns+` FROM inserted t LEFT JOIN users u ON u.id = t.updated_by`,
 		orgID, in.Client, in.Products, in.Locations, in.TotalCameras, in.Status,
-		in.ImplementationDate, in.CurrentStages, in.KeyContacts, in.NextSteps, in.Notes,
+		in.ImplementationDate.timePtr(), in.CurrentStages, in.KeyContacts, in.NextSteps, in.Notes,
 		positionStep, nullableID(userID),
 	))
 	return r, mapWriteErr(err)
@@ -108,7 +114,7 @@ func (s *store) update(ctx context.Context, orgID, userID, id string, in Input) 
 		 )
 		 SELECT `+rowColumns+` FROM updated t LEFT JOIN users u ON u.id = t.updated_by`,
 		orgID, id, in.Client, in.Products, in.Locations, in.TotalCameras,
-		in.Status, in.ImplementationDate, in.CurrentStages,
+		in.Status, in.ImplementationDate.timePtr(), in.CurrentStages,
 		in.KeyContacts, in.NextSteps, in.Notes, nullableID(userID),
 	))
 	return r, mapWriteErr(err)
@@ -231,7 +237,7 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 			   updated_by          = EXCLUDED.updated_by
 			 RETURNING (xmax = 0) AS inserted`,
 			orgID, in.Client, in.Products, in.Locations, in.TotalCameras, in.Status,
-			in.ImplementationDate, in.CurrentStages, in.KeyContacts, in.NextSteps, in.Notes,
+			in.ImplementationDate.timePtr(), in.CurrentStages, in.KeyContacts, in.NextSteps, in.Notes,
 			positionStep, actor,
 		).Scan(&inserted)
 		if err != nil {
