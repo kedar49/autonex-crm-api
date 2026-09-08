@@ -1,0 +1,5 @@
+BEGIN;
+
+ALTER TABLE deals DROP COLUMN IF EXISTS lead_id;
+
+COMMIT;
