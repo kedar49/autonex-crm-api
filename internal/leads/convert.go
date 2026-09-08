@@ -39,13 +39,29 @@ type Conversion struct {
 // defaultDealStage is the first stage of the *deal* pipeline. A converted lead
 // starts at the beginning of the deal board rather than being guessed into the
 // middle of it.
-const defaultDealStage = "lead"
+const defaultDealStage = "discovery"
 
 // validDealStages mirrors deals.Stages. Duplicated deliberately: importing the
 // deals package here would make two domain modules mutually dependent, and the
 // database CHECK constraint is the real enforcement either way.
 var validDealStages = map[string]bool{
-	"lead": true, "qualified": true, "proposal": true, "won": true, "lost": true,
+	"discovery": true, "site_assessment": true, "quote_sent": true,
+	"negotiation": true, "won": true, "lost": true,
+}
+
+func normalizeDealStage(raw string) string {
+	s := strings.TrimSpace(strings.ToLower(raw))
+	s = strings.ReplaceAll(s, " ", "_")
+	s = strings.ReplaceAll(s, "-", "_")
+	switch s {
+	case "prospect", "lead":
+		return "discovery"
+	case "proposal":
+		return "quote_sent"
+	case "qualified":
+		return "site_assessment"
+	}
+	return s
 }
 
 // Convert turns a lead into a contact plus a deal, and marks the lead converted.
@@ -61,10 +77,11 @@ var validDealStages = map[string]bool{
 func (s *Service) Convert(ctx context.Context, orgID, leadID string, in ConvertInput) (Conversion, error) {
 	stage := defaultDealStage
 	if in.DealStage != nil && *in.DealStage != "" {
-		if !validDealStages[*in.DealStage] {
+		norm := normalizeDealStage(*in.DealStage)
+		if !validDealStages[norm] {
 			return Conversion{}, invalid("unknown deal stage %q", *in.DealStage)
 		}
-		stage = *in.DealStage
+		stage = norm
 	}
 	if in.Amount != nil && (*in.Amount < 0 || *in.Amount > 1e12) {
 		return Conversion{}, invalid("amount must be between 0 and 1,000,000,000,000")
@@ -176,16 +193,34 @@ func (s *store) convert(
 		amount = *value
 	}
 
+	if accountID == nil {
+		name := strings.TrimSpace(title)
+		if name == "" {
+			name = "Individual Account"
+		}
+		var found string
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO accounts (org_id, name) VALUES ($1, $2) RETURNING id::text`,
+			orgID, name).Scan(&found); err == nil {
+			accountID = &found
+		}
+	}
+
+	if owner == nil {
+		var defaultOwner string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM profiles WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1`, orgID).Scan(&defaultOwner); err == nil {
+			owner = &defaultOwner
+		}
+	}
+
 	var dealID string
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO deals
-		   (org_id, title, amount, stage, owner_user_id, contact_id, account_id,
-		    expected_close_date, position, lead_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-		         COALESCE((SELECT max(position) + 1000 FROM deals
-		                   WHERE org_id = $1 AND stage = $4), 0), $9)
+		   (title, notes, amount, stage, owner_id, primary_contact_id, account_id,
+		    expected_close_date, lead_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id::text`,
-		orgID, title, amount, stage, owner, contactID, accountID, in.ExpectedCloseDate, leadID,
+		title, in.CallNotes, amount, stage, owner, contactID, accountID, in.ExpectedCloseDate, leadID,
 	).Scan(&dealID); err != nil {
 		return Conversion{}, err
 	}

@@ -58,6 +58,7 @@ type Account struct {
 	// "is this account real?" without a second round-trip per row.
 	ContactCount int `json:"contactCount"`
 	DealCount    int `json:"dealCount"`
+	LeadCount    int `json:"leadCount"`
 }
 
 type store struct {
@@ -82,7 +83,8 @@ const accountColumns = `
 	NULL::text        AS owner_email,
 	a.created_at, a.updated_at,
 	(SELECT count(*) FROM contacts c WHERE c.account_id = a.id AND c.deleted_at IS NULL),
-	(SELECT count(*) FROM deals    d WHERE d.account_id = a.id AND d.deleted_at IS NULL)`
+	(SELECT count(*) FROM deals    d WHERE d.account_id = a.id AND d.deleted_at IS NULL),
+	(SELECT count(*) FROM leads    l WHERE l.account_id = a.id AND l.deleted_at IS NULL)`
 
 const accountFrom = ` FROM accounts a LEFT JOIN profiles p ON p.id = a.owner_id `
 
@@ -206,7 +208,7 @@ func scanAccount(row rowScanner) (Account, error) {
 	err := row.Scan(
 		&a.ID, &a.Name, &a.Website, &a.Industry, &a.Phone, &a.Notes,
 		&a.OwnerUserID, &a.OwnerName, &a.OwnerEmail, &a.CreatedAt, &a.UpdatedAt,
-		&a.ContactCount, &a.DealCount)
+		&a.ContactCount, &a.DealCount, &a.LeadCount)
 	if err != nil {
 		return Account{}, translate(err)
 	}
@@ -280,6 +282,7 @@ type LinkedDeal struct {
 	SiteAssessmentDate   *string   `json:"siteAssessmentDate"`
 	SiteAssessmentLoc    *string   `json:"siteAssessmentLocation"`
 	ExpectedCloseDate    *string   `json:"expectedCloseDate"`
+	Remark               *string   `json:"remark"`
 	CreatedAt            time.Time `json:"createdAt"`
 }
 
@@ -429,15 +432,17 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	dRows, err := s.pool.Query(ctx,
 		`SELECT id::text, title, stage, amount::float8,
 		        probability, NULL::text, NULL::text,
-		        expected_close_date::text, created_at
+		        expected_close_date::text, notes, created_at
 		 FROM deals
-		 WHERE account_id = $1 AND deleted_at IS NULL
-		 ORDER BY created_at DESC`, companyID)
+		 WHERE (account_id = $1 OR account_id IN (
+		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
+		 )) AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID, acc.Name)
 	if err == nil {
 		defer dRows.Close()
 		for dRows.Next() {
 			var d LinkedDeal
-			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.CreatedAt); scanErr == nil {
+			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.Remark, &d.CreatedAt); scanErr == nil {
 				deals = append(deals, d)
 			}
 		}
@@ -456,8 +461,10 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		        q.created_at
 		 FROM quotes q
 		 LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current
-		 WHERE q.account_id = $1 AND q.deleted_at IS NULL
-		 ORDER BY q.created_at DESC`, companyID)
+		 WHERE (q.account_id = $1 OR q.account_id IN (
+		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
+		 )) AND q.deleted_at IS NULL
+		 ORDER BY q.created_at DESC`, companyID, acc.Name)
 	if err == nil {
 		defer qRows.Close()
 		for qRows.Next() {
@@ -480,8 +487,10 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		        i.due_date::text,
 		        i.created_at
 		 FROM invoices i
-		 WHERE i.account_id = $1 AND i.deleted_at IS NULL
-		 ORDER BY i.created_at DESC`, companyID)
+		 WHERE (i.account_id = $1 OR i.account_id IN (
+		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
+		 )) AND i.deleted_at IS NULL
+		 ORDER BY i.created_at DESC`, companyID, acc.Name)
 	if err == nil {
 		defer iRows.Close()
 		for iRows.Next() {
@@ -497,8 +506,10 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	cRows, err := s.pool.Query(ctx,
 		`SELECT id::text, first_name, last_name, email, phone, title
 		 FROM contacts
-		 WHERE account_id = $1 AND deleted_at IS NULL
-		 ORDER BY created_at DESC`, companyID)
+		 WHERE (account_id = $1 OR account_id IN (
+		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
+		 )) AND deleted_at IS NULL
+		 ORDER BY created_at DESC`, companyID, acc.Name)
 	if err == nil {
 		defer cRows.Close()
 		for cRows.Next() {
@@ -519,8 +530,10 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		        l.status, l.value_estimate,
 		        l.created_at
 		 FROM leads l
-		 WHERE l.account_id = $1 AND l.deleted_at IS NULL
-		 ORDER BY l.created_at DESC`, companyID)
+		 WHERE (l.account_id = $1 OR l.account_id IN (
+		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
+		 )) AND l.deleted_at IS NULL
+		 ORDER BY l.created_at DESC`, companyID, acc.Name)
 	if err == nil {
 		defer lRows.Close()
 		for lRows.Next() {
@@ -530,6 +543,10 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 			}
 		}
 	}
+
+	acc.DealCount = len(deals)
+	acc.ContactCount = len(contacts)
+	acc.LeadCount = len(leads)
 
 	return FullCompanyProfilePayload{
 		Account:  acc,

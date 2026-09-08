@@ -71,3 +71,37 @@ func TestStagesAreDistinctFromLeadStages(t *testing.T) {
 		t.Error(`"discovery" is a deal stage and must not be valid for a lead`)
 	}
 }
+
+func TestNormalizeStage(t *testing.T) {
+	cases := map[string]string{
+		"discovery":       "discovery",
+		"Discovery":       "discovery",
+		"  discovery  ":   "discovery",
+		"site_assessment": "site_assessment",
+		"Site assessment": "site_assessment",
+		"Site Assessment": "site_assessment",
+		"site-assessment": "site_assessment",
+		"quote_sent":      "quote_sent",
+		"Quote sent":      "quote_sent",
+		"Quote Sent":      "quote_sent",
+		"negotiation":     "negotiation",
+		"Negotiation":     "negotiation",
+		"won":             "won",
+		"Won":             "won",
+		"lost":            "lost",
+		"Lost":            "lost",
+		"prospect":        "discovery",
+		"lead":            "discovery",
+		"proposal":        "quote_sent",
+		"qualified":       "site_assessment",
+	}
+
+	for input, want := range cases {
+		if got := NormalizeStage(input); got != want {
+			t.Errorf("NormalizeStage(%q) = %q, want %q", input, got, want)
+		}
+		if !ValidStage(input) {
+			t.Errorf("ValidStage(%q) = false, want true", input)
+		}
+	}
+}

@@ -40,6 +40,7 @@ type Deal struct {
 	AccountID         *string    `json:"accountId"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 	Position          float64    `json:"position"`
+	Remark            *string    `json:"remark"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	UpdatedAt         time.Time  `json:"updatedAt"`
 }
@@ -254,6 +255,7 @@ func scanDeal(row rowScanner) (Deal, error) {
 	if err != nil {
 		return Deal{}, translate(err)
 	}
+	d.Remark = d.Description
 	return d, nil
 }
 

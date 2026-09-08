@@ -37,6 +37,7 @@ func IsValidation(err error) bool {
 type Input struct {
 	Title             string     `json:"title"`
 	Description       *string    `json:"description"`
+	Remark            *string    `json:"remark"`
 	Amount            float64    `json:"amount"`
 	Stage             string     `json:"stage"`
 	OwnerUserID       *string    `json:"ownerUserId"`
@@ -106,9 +107,27 @@ func (s *Service) Delete(ctx context.Context, orgID, id string) error {
 	return s.store.delete(ctx, orgID, id)
 }
 
+// NormalizeStage maps raw or legacy stage strings, space-separated names,
+// and case variations to the canonical stage identifier.
+func NormalizeStage(raw string) string {
+	s := strings.TrimSpace(strings.ToLower(raw))
+	s = strings.ReplaceAll(s, " ", "_")
+	s = strings.ReplaceAll(s, "-", "_")
+	switch s {
+	case "prospect", "lead":
+		return "discovery"
+	case "proposal":
+		return "quote_sent"
+	case "qualified":
+		return "site_assessment"
+	}
+	return s
+}
+
 // Move applies a drag-and-drop: change of column and/or position within one.
 // Move returns the moved deal and the stage it came from.
 func (s *Service) Move(ctx context.Context, orgID, id string, mv Move) (Deal, string, error) {
+	mv.Stage = NormalizeStage(mv.Stage)
 	if !ValidStage(mv.Stage) {
 		return Deal{}, "", invalid("unknown stage %q", mv.Stage)
 	}
@@ -122,8 +141,9 @@ func (s *Service) Stats(ctx context.Context, orgID string) ([]Stats, error) {
 
 // ValidStage reports whether stage is part of the lifecycle.
 func ValidStage(stage string) bool {
+	norm := NormalizeStage(stage)
 	for _, s := range Stages {
-		if s == stage {
+		if s == norm {
 			return true
 		}
 	}
@@ -166,11 +186,18 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 func normalize(in Input) Input {
 	in.Title = strings.TrimSpace(in.Title)
 	in.Description = trimmedOrNil(in.Description)
+	in.Remark = trimmedOrNil(in.Remark)
+	if in.Remark != nil && in.Description == nil {
+		in.Description = in.Remark
+	} else if in.Description != nil && in.Remark == nil {
+		in.Remark = in.Description
+	}
 	in.OwnerUserID = trimmedOrNil(in.OwnerUserID)
 	in.ContactID = trimmedOrNil(in.ContactID)
 	in.AccountID = trimmedOrNil(in.AccountID)
 
-	if strings.TrimSpace(in.Stage) == "" {
+	in.Stage = NormalizeStage(in.Stage)
+	if in.Stage == "" {
 		in.Stage = Stages[0]
 	}
 	return in

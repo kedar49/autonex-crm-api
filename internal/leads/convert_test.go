@@ -35,20 +35,20 @@ func TestValidDealStagesMatchTheDealsPipeline(t *testing.T) {
 	// This map is a deliberate copy of deals.Stages (importing the deals package
 	// would make the two modules mutually dependent). If they drift, conversion
 	// starts rejecting valid stages — or worse, relying on the DB CHECK to fail.
-	for _, stage := range []string{"lead", "qualified", "proposal", "won", "lost"} {
+	for _, stage := range []string{"discovery", "site_assessment", "quote_sent", "negotiation", "won", "lost"} {
 		if !validDealStages[stage] {
 			t.Errorf("deal stage %q missing from validDealStages", stage)
 		}
 	}
-	if len(validDealStages) != 5 {
-		t.Errorf("len(validDealStages) = %d, want 5", len(validDealStages))
+	if len(validDealStages) != 6 {
+		t.Errorf("len(validDealStages) = %d, want 6", len(validDealStages))
 	}
 	// "contacted" is a lead stage; a deal must never accept it.
 	if validDealStages["contacted"] {
 		t.Error(`"contacted" is a lead stage and must not be a valid deal stage`)
 	}
 	// A converted lead starts at the beginning of the deal pipeline.
-	if defaultDealStage != "lead" {
-		t.Errorf("defaultDealStage = %q, want lead", defaultDealStage)
+	if defaultDealStage != "discovery" {
+		t.Errorf("defaultDealStage = %q, want discovery", defaultDealStage)
 	}
 }
