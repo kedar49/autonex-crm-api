@@ -165,10 +165,11 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 		table string
 		id    *string
 	}{
-		// An owner is a profile here, not a row in users. The account link has
-		// no column in this schema, so there is nothing to validate for it.
+		// An owner is a profile here, not a row in users.
 		{"profiles", in.OwnerUserID},
 		{"contacts", in.ContactID},
+		{"accounts", in.AccountID},
+		{"leads", in.LeadID},
 	} {
 		if ref.id == nil {
 			continue
@@ -179,6 +180,19 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 		}
 		if !ok {
 			return Input{}, ErrRefNotFound
+		}
+	}
+
+	// A deal's lead has to be a lead for the same account. Nothing enforced this,
+	// and the picker lists every lead in the workspace, so attaching one client's
+	// lead to another client's deal was a single mis-click.
+	if in.LeadID != nil && in.AccountID != nil {
+		ok, err := s.store.leadBelongsToAccount(ctx, *in.LeadID, *in.AccountID)
+		if err != nil {
+			return Input{}, err
+		}
+		if !ok {
+			return Input{}, invalid("that lead belongs to a different account")
 		}
 	}
 	return in, nil

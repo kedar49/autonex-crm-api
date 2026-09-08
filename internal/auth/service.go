@@ -48,6 +48,18 @@ func newService(pool *pgxpool.Pool, cfg config.Config) *Service {
 
 // Register creates a password-backed user and starts a session.
 func (s *Service) Register(ctx context.Context, email, password, name string) (Session, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+
+	// Checked before the lookup, and before any account exists: the allow-list is
+	// a rule about who may sign in at all, not a rule about SSO. It used to be
+	// enforced only on the SSO path, which made password signup an open door
+	// straight past it — anyone could self-register on any domain and get their
+	// own workspace. Refusing before the lookup also avoids telling an outsider
+	// whether an address is registered.
+	if !domainAllowed(s.cfg.SSOAllowedDomains, email) {
+		return Session{}, ErrDomainNotAllowed
+	}
+
 	switch _, err := s.store.userByEmail(ctx, email); {
 	case err == nil:
 		return Session{}, ErrEmailTaken
@@ -65,13 +77,24 @@ func (s *Service) Register(ctx context.Context, email, password, name string) (S
 		namePtr = &trimmed
 	}
 
-	u, err := s.store.createUserWithOrg(ctx, newUser{
+	joining := newUser{
 		Email:        email,
 		Name:         namePtr,
 		OrgName:      defaultOrgName(email),
 		PasswordHash: &hash,
 		AuthProvider: "password",
-	})
+	}
+
+	// Honour the same "one workspace" setting SSO does. Without it a colleague
+	// who happens to register with a password lands in a private workspace and
+	// cannot see any of the team's data — the exact split SSO_DEFAULT_ORG_ID
+	// exists to prevent.
+	var u User
+	if s.cfg.SSODefaultOrgID != "" {
+		u, err = s.store.createUserInOrg(ctx, s.cfg.SSODefaultOrgID, joining)
+	} else {
+		u, err = s.store.createUserWithOrg(ctx, joining)
+	}
 	if err != nil {
 		return Session{}, err
 	}

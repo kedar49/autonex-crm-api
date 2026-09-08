@@ -510,9 +510,6 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 }
 
 func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, error) {
-	if table == "accounts" {
-		table = "companies"
-	}
 	if table == "users" {
 		var exists bool
 		err := s.pool.QueryRow(ctx,

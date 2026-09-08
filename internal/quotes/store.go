@@ -379,9 +379,6 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 
 // refInOrg checks a client-supplied foreign key against the caller's org.
 func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error) {
-	if table == "accounts" {
-		table = "companies"
-	}
 	if table == "users" {
 		var exists bool
 		err := s.pool.QueryRow(ctx,

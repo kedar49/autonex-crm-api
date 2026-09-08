@@ -310,9 +310,6 @@ func (s *store) explainWriteMiss(ctx context.Context, _, id string) error {
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
 // existence is the only thing left to verify.
 func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error) {
-	if table == "accounts" {
-		table = "companies"
-	}
 	if table == "users" {
 		var exists bool
 		err := s.pool.QueryRow(ctx,

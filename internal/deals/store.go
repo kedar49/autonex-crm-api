@@ -40,6 +40,10 @@ type Deal struct {
 	ContactID   *string `json:"contactId"`
 	ContactName *string `json:"contactName"`
 	AccountID   *string `json:"accountId"`
+	// The lead this deal was converted from. Read and written: it used to be set
+	// on create and never selected or updated, so the edit form showed it empty
+	// and saving silently dropped the link.
+	LeadID *string `json:"leadId"`
 	// What is being deployed on this deal. Free text for products and location:
 	// the catalogue is not modelled, and a site list is rarely one tidy value.
 	TotalCameras      *int       `json:"totalCameras"`
@@ -77,6 +81,7 @@ const dealColumns = `
 	d.primary_contact_id::text AS contact_id,
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
 	d.account_id::text         AS account_id,
+	d.lead_id::text            AS lead_id,
 	d.total_cameras, d.location, d.products,
 	d.expected_close_date,
 	(row_number() OVER (PARTITION BY d.stage ORDER BY d.created_at, d.id) * 1000)::float8,
@@ -146,11 +151,11 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 		 SET title = $2, notes = $3, amount = $4, stage = $5,
 		     owner_id = $6, primary_contact_id = $7, account_id = $8,
 		     expected_close_date = $9, total_cameras = $10, location = $11,
-		     products = $12, updated_at = now()
+		     products = $12, lead_id = $13, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id, in.Title, in.Description, in.Amount, in.Stage,
 		in.OwnerUserID, in.ContactID, in.AccountID, in.ExpectedCloseDate,
-		in.TotalCameras, in.Location, in.Products)
+		in.TotalCameras, in.Location, in.Products, in.LeadID)
 	if err != nil {
 		return Deal{}, translate(err)
 	}
@@ -208,6 +213,26 @@ func (s *store) move(ctx context.Context, orgID, id, stage string, _ int) (Deal,
 	return d, previous, s.syncDelivery(ctx, orgID, d)
 }
 
+// leadBelongsToAccount reports whether a lead is filed under the given account.
+//
+// A lead with no account at all passes: those are leads captured before the
+// company record existed, and refusing to attach one would block the ordinary
+// convert-a-lead-into-a-deal path.
+func (s *store) leadBelongsToAccount(ctx context.Context, leadID, accountID string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT l.account_id IS NULL OR l.account_id = $2
+		   FROM leads l WHERE l.id = $1 AND l.deleted_at IS NULL`,
+		leadID, accountID).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if isPgCode(err, pgInvalidTextRepr) {
+		return false, nil
+	}
+	return ok, err
+}
+
 // deliveryStage is the point at which a deal acquires a row in the client
 // delivery tracker. Named rather than inlined so the board, the form and the
 // drag handler cannot disagree about which stage means "being installed".
@@ -243,9 +268,6 @@ func (s *store) syncDelivery(ctx context.Context, orgID string, d Deal) error {
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
 // existence is the only thing left to verify.
 func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error) {
-	if table == "accounts" {
-		table = "companies"
-	}
 	if table == "users" || table == "profiles" {
 		var exists bool
 		err := s.pool.QueryRow(ctx,
@@ -307,7 +329,7 @@ func scanDeal(row rowScanner) (Deal, error) {
 		&d.ID, &d.Title, &d.Description, &d.Amount, &d.Stage,
 		&d.OwnerUserID, &d.OwnerName, &d.OwnerEmail,
 		&d.ContactID, &d.ContactName,
-		&d.AccountID, &d.TotalCameras, &d.Location, &d.Products,
+		&d.AccountID, &d.LeadID, &d.TotalCameras, &d.Location, &d.Products,
 		&d.ExpectedCloseDate, &d.Position, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return Deal{}, translate(err)

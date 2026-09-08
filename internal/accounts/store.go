@@ -2,17 +2,20 @@
 // here is a company the tenant sells to — not the tenant itself, which is an
 // organization (see EXPLAINER §13).
 //
-// In this deployment the accounts a lead or deal belongs to live in the
-// `accounts` table: contacts.account_id, deals.account_id and leads.account_id
-// all point there, and it holds the real data. The vestigial `accounts` table is
-// not used. This module therefore reads and writes `companies`, which is also
-// what makes the per-account contact and deal counts meaningful.
+// The accounts a lead or deal belongs to live in the `accounts` table:
+// contacts.account_id, deals.account_id and leads.account_id all point there.
+//
+// That table was called `companies` until migration 000004 renamed it. Nothing
+// named `companies` exists any more — if you find a reference to it, it is a
+// bug, not a second table. Several modules kept querying it for a while and
+// returned 500s on any account-linked write as a result.
 package accounts
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -68,7 +71,7 @@ type store struct {
 // different child tables a join would multiply rows and need DISTINCT, and at
 // list-page sizes (25) the planner turns these into cheap index lookups.
 //
-// `companies` carries a domain rather than a full website URL, and has no phone
+// `accounts` carries a domain rather than a full website URL, and has no phone
 // or notes column; those are selected as typed NULLs so the scan positions and
 // the JSON contract are unchanged.
 const accountColumns = `
@@ -282,6 +285,9 @@ type LinkedDeal struct {
 	SiteAssessmentLoc  *string `json:"siteAssessmentLocation"`
 	ExpectedCloseDate  *string `json:"expectedCloseDate"`
 	Remark             *string `json:"remark"`
+	// Carried so the company profile's edit dialog round-trips the whole deal.
+	// A field missing here is written back as empty when someone saves.
+	LeadID *string `json:"leadId"`
 	// Mirrors the deal's deployment fields, so the company profile can show and
 	// total what was actually sold without a second request per deal.
 	TotalCameras *int      `json:"totalCameras"`
@@ -436,7 +442,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	dRows, err := s.pool.Query(ctx,
 		`SELECT id::text, title, stage, amount::float8,
 		        probability, NULL::text, NULL::text,
-		        expected_close_date::text, notes,
+		        expected_close_date::text, notes, lead_id::text,
 		        total_cameras, location, products, created_at
 		 FROM deals
 		 WHERE (account_id = $1 OR account_id IN (
@@ -447,7 +453,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		defer dRows.Close()
 		for dRows.Next() {
 			var d LinkedDeal
-			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.Remark, &d.TotalCameras, &d.Location, &d.Products, &d.CreatedAt); scanErr == nil {
+			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.Remark, &d.LeadID, &d.TotalCameras, &d.Location, &d.Products, &d.CreatedAt); scanErr == nil {
 				deals = append(deals, d)
 			}
 		}
@@ -480,30 +486,47 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		}
 	}
 
-	// Fetch linked invoices
+	// Fetch linked invoices.
+	//
+	// The billed figure is amount_due: there is no `total` column on this table,
+	// and selecting one made every row error and the whole tab render empty. The
+	// paid figure comes from settled payments, the same derivation the invoices
+	// module uses, so a part-paid invoice shows what is actually outstanding.
 	invoices := make([]LinkedInvoice, 0)
 	iRows, err := s.pool.Query(ctx,
 		`SELECT i.id::text, i.invoice_number,
+		        -- No title column on this table; the scan position is kept so the
+		        -- JSON contract does not change.
 		        NULL::text AS title,
 		        i.status,
-		        COALESCE(i.total, 0)::float8,
-		        COALESCE(i.total, 0)::float8 AS amount_due,
-		        0::float8 AS amount_paid,
+		        i.amount_due::float8,
+		        (i.amount_due - paid.amt)::float8 AS amount_due,
+		        paid.amt::float8                  AS amount_paid,
 		        i.due_date::text,
 		        i.created_at
 		 FROM invoices i
+		 CROSS JOIN LATERAL (
+		   SELECT COALESCE(sum(amount), 0) AS amt
+		     FROM payments pm
+		    WHERE pm.invoice_id = i.id AND pm.status = 'succeeded'
+		 ) paid
 		 WHERE (i.account_id = $1 OR i.account_id IN (
 		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
 		 )) AND i.deleted_at IS NULL
 		 ORDER BY i.created_at DESC`, companyID, acc.Name)
-	if err == nil {
-		defer iRows.Close()
-		for iRows.Next() {
-			var inv LinkedInvoice
-			if scanErr := iRows.Scan(&inv.ID, &inv.InvoiceNumber, &inv.Title, &inv.Status, &inv.Total, &inv.AmountDue, &inv.AmountPaid, &inv.DueDate, &inv.CreatedAt); scanErr == nil {
-				invoices = append(invoices, inv)
-			}
+	if err != nil {
+		// Previously swallowed. A tab that renders empty because its query is
+		// broken looks identical to a client with no invoices, which is how this
+		// went unnoticed: fail loudly instead.
+		return FullCompanyProfilePayload{}, fmt.Errorf("linked invoices: %w", err)
+	}
+	defer iRows.Close()
+	for iRows.Next() {
+		var inv LinkedInvoice
+		if scanErr := iRows.Scan(&inv.ID, &inv.InvoiceNumber, &inv.Title, &inv.Status, &inv.Total, &inv.AmountDue, &inv.AmountPaid, &inv.DueDate, &inv.CreatedAt); scanErr != nil {
+			return FullCompanyProfilePayload{}, fmt.Errorf("scan linked invoice: %w", scanErr)
 		}
+		invoices = append(invoices, inv)
 	}
 
 	// Fetch linked contacts

@@ -70,6 +70,15 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusConflict, "email already registered")
 		return
 	}
+	if errors.Is(err, ErrDomainNotAllowed) {
+		httpx.WriteError(w, http.StatusForbidden,
+			"Sign up with your work account. Only accounts on the company domain can use this app.")
+		return
+	}
+	if errors.Is(err, ErrOrgNotFound) {
+		httpx.WriteServerError(w, "sign-up is misconfigured: the workspace new accounts join was not found", err)
+		return
+	}
 	if err != nil {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create account")
 		return

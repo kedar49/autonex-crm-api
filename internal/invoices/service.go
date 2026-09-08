@@ -244,7 +244,7 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 		table string
 		id    *string
 	}{
-		{"companies", in.AccountID},
+		{"accounts", in.AccountID},
 		{"contacts", in.ContactID},
 		{"deals", in.DealID},
 		{"users", in.OwnerUserID},
