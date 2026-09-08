@@ -35,6 +35,10 @@ type PreviewRow struct {
 	Values   Input  `json:"values"`
 	// ExistingID is set for update/unchanged: the row that would be overwritten.
 	ExistingID *string `json:"existingId"`
+	// MatchedDeal names the deal behind that row, when it has one. A client can
+	// have several tracker rows once deals are linked, so "will update Acme" is
+	// ambiguous without saying which sale.
+	MatchedDeal *string `json:"matchedDeal"`
 	// Changes names the fields an update would alter, for the preview's diff.
 	Changes []string `json:"changes"`
 }
@@ -143,9 +147,16 @@ func (s *Service) Preview(ctx context.Context, orgID, filename string, r io.Read
 	if err != nil {
 		return Preview{}, err
 	}
+	// Same rule the commit uses (see resolveByClient): prefer the unlinked row,
+	// otherwise the oldest linked one. Building it here rather than querying per
+	// line keeps the preview to one read, and — more importantly — guarantees
+	// the preview and the commit pick the same row.
 	byClient := make(map[string]Row, len(existing))
 	for _, row := range existing {
-		byClient[clientKey(row.Client)] = row
+		prior, seen := byClient[clientKey(row.Client)]
+		if !seen || preferRow(row, prior) {
+			byClient[clientKey(row.Client)] = row
+		}
 	}
 
 	out := Preview{
@@ -164,6 +175,7 @@ func (s *Service) Preview(ctx context.Context, orgID, filename string, r io.Read
 
 		if prior, ok := existing2(byClient, key); ok {
 			row.ExistingID = &prior.ID
+			row.MatchedDeal = prior.DealTitle
 			row.Changes = diff(prior, p.values)
 			if len(row.Changes) == 0 {
 				row.Action = ActionUnchanged
@@ -492,6 +504,17 @@ func changedText(existing, incoming *string) bool {
 // case- and whitespace-insensitive.
 func clientKey(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// preferRow reports whether candidate should displace incumbent as the row an
+// import writes to: unlinked beats linked, then oldest wins.
+func preferRow(candidate, incumbent Row) bool {
+	candidateLinked := candidate.DealID != nil
+	incumbentLinked := incumbent.DealID != nil
+	if candidateLinked != incumbentLinked {
+		return !candidateLinked
+	}
+	return candidate.CreatedAt.Before(incumbent.CreatedAt)
 }
 
 func existing2(m map[string]Row, key string) (Row, bool) {

@@ -116,7 +116,6 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, payload)
 }
 
-
 func writeErr(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, ErrNotFound):

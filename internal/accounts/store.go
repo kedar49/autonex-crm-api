@@ -25,7 +25,6 @@ var (
 	jsonUnmarshal = json.Unmarshal
 )
 
-
 var (
 	// ErrNotFound means no account with that id exists.
 	ErrNotFound = errors.New("account not found")
@@ -274,16 +273,21 @@ type CompanyProfile struct {
 }
 
 type LinkedDeal struct {
-	ID                   string    `json:"id"`
-	Title                string    `json:"title"`
-	Stage                string    `json:"stage"`
-	Amount               float64   `json:"amount"`
-	Probability          *int      `json:"probability"`
-	SiteAssessmentDate   *string   `json:"siteAssessmentDate"`
-	SiteAssessmentLoc    *string   `json:"siteAssessmentLocation"`
-	ExpectedCloseDate    *string   `json:"expectedCloseDate"`
-	Remark               *string   `json:"remark"`
-	CreatedAt            time.Time `json:"createdAt"`
+	ID                 string  `json:"id"`
+	Title              string  `json:"title"`
+	Stage              string  `json:"stage"`
+	Amount             float64 `json:"amount"`
+	Probability        *int    `json:"probability"`
+	SiteAssessmentDate *string `json:"siteAssessmentDate"`
+	SiteAssessmentLoc  *string `json:"siteAssessmentLocation"`
+	ExpectedCloseDate  *string `json:"expectedCloseDate"`
+	Remark             *string `json:"remark"`
+	// Mirrors the deal's deployment fields, so the company profile can show and
+	// total what was actually sold without a second request per deal.
+	TotalCameras *int      `json:"totalCameras"`
+	Location     *string   `json:"location"`
+	Products     *string   `json:"products"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 type LinkedQuote struct {
@@ -331,13 +335,13 @@ type LinkedLead struct {
 }
 
 type FullCompanyProfilePayload struct {
-	Account  Account        `json:"account"`
-	Profile  CompanyProfile `json:"profile"`
-	Deals    []LinkedDeal   `json:"deals"`
-	Quotes   []LinkedQuote  `json:"quotes"`
+	Account  Account         `json:"account"`
+	Profile  CompanyProfile  `json:"profile"`
+	Deals    []LinkedDeal    `json:"deals"`
+	Quotes   []LinkedQuote   `json:"quotes"`
 	Invoices []LinkedInvoice `json:"invoices"`
 	Contacts []LinkedContact `json:"contacts"`
-	Leads    []LinkedLead   `json:"leads"`
+	Leads    []LinkedLead    `json:"leads"`
 }
 
 type ProfileInput struct {
@@ -432,7 +436,8 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	dRows, err := s.pool.Query(ctx,
 		`SELECT id::text, title, stage, amount::float8,
 		        probability, NULL::text, NULL::text,
-		        expected_close_date::text, notes, created_at
+		        expected_close_date::text, notes,
+		        total_cameras, location, products, created_at
 		 FROM deals
 		 WHERE (account_id = $1 OR account_id IN (
 		     SELECT id FROM accounts WHERE lower(trim(name)) = lower(trim($2)) AND deleted_at IS NULL
@@ -442,7 +447,7 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 		defer dRows.Close()
 		for dRows.Next() {
 			var d LinkedDeal
-			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.Remark, &d.CreatedAt); scanErr == nil {
+			if scanErr := dRows.Scan(&d.ID, &d.Title, &d.Stage, &d.Amount, &d.Probability, &d.SiteAssessmentDate, &d.SiteAssessmentLoc, &d.ExpectedCloseDate, &d.Remark, &d.TotalCameras, &d.Location, &d.Products, &d.CreatedAt); scanErr == nil {
 				deals = append(deals, d)
 			}
 		}
@@ -631,4 +636,3 @@ func (s *store) upsertProfile(ctx context.Context, orgID, companyID string, in P
 
 	return s.getFullProfile(ctx, orgID, companyID)
 }
-

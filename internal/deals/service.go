@@ -44,6 +44,9 @@ type Input struct {
 	ContactID         *string    `json:"contactId"`
 	AccountID         *string    `json:"accountId"`
 	LeadID            *string    `json:"leadId"`
+	TotalCameras      *int       `json:"totalCameras"`
+	Location          *string    `json:"location"`
+	Products          *string    `json:"products"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 }
 
@@ -195,6 +198,8 @@ func normalize(in Input) Input {
 	in.OwnerUserID = trimmedOrNil(in.OwnerUserID)
 	in.ContactID = trimmedOrNil(in.ContactID)
 	in.AccountID = trimmedOrNil(in.AccountID)
+	in.Location = trimmedOrNil(in.Location)
+	in.Products = trimmedOrNil(in.Products)
 
 	in.Stage = NormalizeStage(in.Stage)
 	if in.Stage == "" {
@@ -229,9 +234,19 @@ func validate(in Input) error {
 		return invalid("amount cannot be negative")
 	case in.Amount > 1e12:
 		return invalid("amount must be 1,000,000,000,000 or less")
+	case in.TotalCameras != nil && *in.TotalCameras < 0:
+		return invalid("number of cameras cannot be negative")
+	case in.TotalCameras != nil && *in.TotalCameras > 1_000_000:
+		return invalid("number of cameras must be 1,000,000 or fewer")
 	}
 	if in.Description != nil && len(*in.Description) > 5000 {
 		return invalid("description must be 5000 characters or fewer")
+	}
+	if in.Location != nil && len(*in.Location) > 500 {
+		return invalid("location must be 500 characters or fewer")
+	}
+	if in.Products != nil && len(*in.Products) > 500 {
+		return invalid("products must be 500 characters or fewer")
 	}
 	return nil
 }

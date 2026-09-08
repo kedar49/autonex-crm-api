@@ -308,3 +308,31 @@ func TestDateNormalizesToMidnightUTC(t *testing.T) {
 		t.Errorf("date = %s, want 2026-09-08 (the calendar day, not a shifted one)", got)
 	}
 }
+
+// Once rows link to deals, a client can have several — so which one an import
+// writes to has to be decided, and decided the same way in the preview and the
+// commit. Unlinked wins; otherwise the oldest.
+func TestPreferRowPicksUnlinkedThenOldest(t *testing.T) {
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	dealID := "d1"
+
+	unlinkedRecent := Row{CreatedAt: recent}
+	linkedOld := Row{CreatedAt: old, DealID: &dealID}
+
+	if !preferRow(unlinkedRecent, linkedOld) {
+		t.Error("an unlinked row should win even when a linked row is older")
+	}
+	if preferRow(linkedOld, unlinkedRecent) {
+		t.Error("a linked row should not displace an unlinked one")
+	}
+
+	linkedRecent := Row{CreatedAt: recent, DealID: &dealID}
+	if !preferRow(linkedOld, linkedRecent) {
+		t.Error("between two linked rows the oldest should win")
+	}
+
+	if preferRow(Row{CreatedAt: recent}, Row{CreatedAt: old}) {
+		t.Error("between two unlinked rows the oldest should win")
+	}
+}

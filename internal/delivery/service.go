@@ -54,22 +54,28 @@ func IsValidation(err error) bool {
 // these values arrive by pasting or importing a sheet, and a row someone has
 // half-filled is worth more stored than rejected.
 type Row struct {
-	ID                 string    `json:"id"`
-	Client             string    `json:"client"`
-	Products           *string   `json:"products"`
-	Locations          *string   `json:"locations"`
-	TotalCameras       *int      `json:"totalCameras"`
-	Status             *string   `json:"status"`
-	ImplementationDate *Date     `json:"implementationDate"`
-	CurrentStages      *string   `json:"currentStages"`
-	KeyContacts        *string   `json:"keyContacts"`
-	NextSteps          *string   `json:"nextSteps"`
-	Notes              *string   `json:"notes"`
-	Position           int       `json:"position"`
-	UpdatedBy          *string   `json:"updatedBy"`
-	UpdatedByName      *string   `json:"updatedByName"`
-	CreatedAt          time.Time `json:"createdAt"`
-	UpdatedAt          time.Time `json:"updatedAt"`
+	ID                 string  `json:"id"`
+	Client             string  `json:"client"`
+	Products           *string `json:"products"`
+	Locations          *string `json:"locations"`
+	TotalCameras       *int    `json:"totalCameras"`
+	Status             *string `json:"status"`
+	ImplementationDate *Date   `json:"implementationDate"`
+	CurrentStages      *string `json:"currentStages"`
+	KeyContacts        *string `json:"keyContacts"`
+	NextSteps          *string `json:"nextSteps"`
+	Notes              *string `json:"notes"`
+	Position           int     `json:"position"`
+	// The deal this row is delivering, denormalized so the grid can show the
+	// pipeline stage without a lookup per row. Null for rows typed or imported
+	// before any deal existed.
+	DealID        *string   `json:"dealId"`
+	DealTitle     *string   `json:"dealTitle"`
+	DealStage     *string   `json:"dealStage"`
+	UpdatedBy     *string   `json:"updatedBy"`
+	UpdatedByName *string   `json:"updatedByName"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 // Input is the writable shape of a row. Pointer fields distinguish "clear this

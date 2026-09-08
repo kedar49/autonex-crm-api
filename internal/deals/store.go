@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/go-crm/services/internal/delivery"
+	"github.com/go-crm/services/pkg/middleware"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,21 +26,25 @@ const (
 	pgForeignKeyViolation = "23503"
 )
 
-
 // Deal is the module's view of a row, including the denormalized owner and
 // contact labels the board renders on each card.
 type Deal struct {
-	ID                string     `json:"id"`
-	Title             string     `json:"title"`
-	Description       *string    `json:"description"`
-	Amount            float64    `json:"amount"`
-	Stage             string     `json:"stage"`
-	OwnerUserID       *string    `json:"ownerUserId"`
-	OwnerName         *string    `json:"ownerName"`
-	OwnerEmail        *string    `json:"ownerEmail"`
-	ContactID         *string    `json:"contactId"`
-	ContactName       *string    `json:"contactName"`
-	AccountID         *string    `json:"accountId"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	Description *string `json:"description"`
+	Amount      float64 `json:"amount"`
+	Stage       string  `json:"stage"`
+	OwnerUserID *string `json:"ownerUserId"`
+	OwnerName   *string `json:"ownerName"`
+	OwnerEmail  *string `json:"ownerEmail"`
+	ContactID   *string `json:"contactId"`
+	ContactName *string `json:"contactName"`
+	AccountID   *string `json:"accountId"`
+	// What is being deployed on this deal. Free text for products and location:
+	// the catalogue is not modelled, and a site list is rarely one tidy value.
+	TotalCameras      *int       `json:"totalCameras"`
+	Location          *string    `json:"location"`
+	Products          *string    `json:"products"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 	Position          float64    `json:"position"`
 	Remark            *string    `json:"remark"`
@@ -70,6 +77,7 @@ const dealColumns = `
 	d.primary_contact_id::text AS contact_id,
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
 	d.account_id::text         AS account_id,
+	d.total_cameras, d.location, d.products,
 	d.expected_close_date,
 	(row_number() OVER (PARTITION BY d.stage ORDER BY d.created_at, d.id) * 1000)::float8,
 	d.created_at, d.updated_at`
@@ -114,16 +122,22 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO deals
 		   (title, notes, amount, stage, owner_id, primary_contact_id,
-		    account_id, lead_id, expected_close_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		    account_id, lead_id, expected_close_date,
+		    total_cameras, location, products)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id::text`,
 		in.Title, in.Description, in.Amount, in.Stage, in.OwnerUserID,
 		in.ContactID, in.AccountID, in.LeadID, in.ExpectedCloseDate,
+		in.TotalCameras, in.Location, in.Products,
 	).Scan(&id)
 	if err != nil {
 		return Deal{}, translate(err)
 	}
-	return s.get(ctx, orgID, id)
+	d, err := s.get(ctx, orgID, id)
+	if err != nil {
+		return Deal{}, err
+	}
+	return d, s.syncDelivery(ctx, orgID, d)
 }
 
 func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, error) {
@@ -131,17 +145,23 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 		`UPDATE deals
 		 SET title = $2, notes = $3, amount = $4, stage = $5,
 		     owner_id = $6, primary_contact_id = $7, account_id = $8,
-		     expected_close_date = $9, updated_at = now()
+		     expected_close_date = $9, total_cameras = $10, location = $11,
+		     products = $12, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id, in.Title, in.Description, in.Amount, in.Stage,
-		in.OwnerUserID, in.ContactID, in.AccountID, in.ExpectedCloseDate)
+		in.OwnerUserID, in.ContactID, in.AccountID, in.ExpectedCloseDate,
+		in.TotalCameras, in.Location, in.Products)
 	if err != nil {
 		return Deal{}, translate(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return Deal{}, ErrNotFound
 	}
-	return s.get(ctx, orgID, id)
+	d, err := s.get(ctx, orgID, id)
+	if err != nil {
+		return Deal{}, err
+	}
+	return d, s.syncDelivery(ctx, orgID, d)
 }
 
 func (s *store) delete(ctx context.Context, _ string, id string) error {
@@ -181,7 +201,43 @@ func (s *store) move(ctx context.Context, orgID, id, stage string, _ int) (Deal,
 		return Deal{}, "", translate(err)
 	}
 	d, err := s.get(ctx, orgID, id)
-	return d, previous, err
+	if err != nil {
+		return Deal{}, "", err
+	}
+	// Dragging a card into Delivery is the gesture that puts it on the tracker.
+	return d, previous, s.syncDelivery(ctx, orgID, d)
+}
+
+// deliveryStage is the point at which a deal acquires a row in the client
+// delivery tracker. Named rather than inlined so the board, the form and the
+// drag handler cannot disagree about which stage means "being installed".
+const deliveryStage = "delivery"
+
+// syncDelivery keeps the tracker in step with a deal that has just been written.
+//
+// Two things happen here, in this order: a deal that has reached delivery gets
+// its tracker row (created, or adopted from a matching unlinked one), and then
+// the shared columns are pushed onto whatever row it now has.
+//
+// Failures are returned rather than swallowed: a deal whose tracker row silently
+// failed to appear is exactly the kind of gap this linking was asked for.
+// The acting user is read from the request context rather than threaded through
+// Create/Update/Move: it is only needed for the tracker's created_by/updated_by
+// audit columns, and adding a parameter to every signature between the handler
+// and here would be a lot of churn for that. A background caller with no user on
+// the context records NULL, which is accurate.
+func (s *store) syncDelivery(ctx context.Context, orgID string, d Deal) error {
+	userID := middleware.UserID(ctx)
+	if d.Stage == deliveryStage {
+		if _, err := delivery.EnsureRowForDeal(ctx, s.pool, orgID, d.ID, userID); err != nil {
+			return err
+		}
+	}
+	return delivery.SyncFromDeal(ctx, s.pool, d.ID, delivery.DealFields{
+		Products:     d.Products,
+		Location:     d.Location,
+		TotalCameras: d.TotalCameras,
+	})
 }
 
 // refInOrg checks a client-supplied foreign key. Single-tenant here, so
@@ -251,7 +307,8 @@ func scanDeal(row rowScanner) (Deal, error) {
 		&d.ID, &d.Title, &d.Description, &d.Amount, &d.Stage,
 		&d.OwnerUserID, &d.OwnerName, &d.OwnerEmail,
 		&d.ContactID, &d.ContactName,
-		&d.AccountID, &d.ExpectedCloseDate, &d.Position, &d.CreatedAt, &d.UpdatedAt)
+		&d.AccountID, &d.TotalCameras, &d.Location, &d.Products,
+		&d.ExpectedCloseDate, &d.Position, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return Deal{}, translate(err)
 	}
