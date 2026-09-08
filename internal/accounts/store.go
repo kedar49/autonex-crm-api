@@ -138,7 +138,7 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Account, er
 
 func (s *store) update(ctx context.Context, orgID, id string, in Input) (Account, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE companies
+		`UPDATE accounts
 		 SET name = $2, domain = $3, industry = $4, owner_id = $5, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
 		id, in.Name, in.Website, in.Industry, in.OwnerUserID)
@@ -427,7 +427,9 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	// Fetch linked deals
 	deals := make([]LinkedDeal, 0)
 	dRows, err := s.pool.Query(ctx,
-		`SELECT id::text, title, stage, amount, probability, site_assessment_date::text, site_assessment_location, expected_close_date::text, created_at
+		`SELECT id::text, title, stage, amount::float8,
+		        probability, NULL::text, NULL::text,
+		        expected_close_date::text, created_at
 		 FROM deals
 		 WHERE account_id = $1 AND deleted_at IS NULL
 		 ORDER BY created_at DESC`, companyID)
@@ -444,10 +446,18 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	// Fetch linked quotes
 	quotes := make([]LinkedQuote, 0)
 	qRows, err := s.pool.Query(ctx,
-		`SELECT id::text, number, status, total, currency, current_version, valid_until::text, created_at
-		 FROM quotes
-		 WHERE account_id = $1 AND deleted_at IS NULL
-		 ORDER BY created_at DESC`, companyID)
+		`SELECT q.id::text,
+		        'Q-' || upper(substr(q.id::text, 1, 8)),
+		        q.status,
+		        COALESCE(v.total, 0)::float8,
+		        COALESCE(v.currency, 'USD'),
+		        COALESCE(v.version_number, 1),
+		        q.valid_until::text,
+		        q.created_at
+		 FROM quotes q
+		 LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current
+		 WHERE q.account_id = $1 AND q.deleted_at IS NULL
+		 ORDER BY q.created_at DESC`, companyID)
 	if err == nil {
 		defer qRows.Close()
 		for qRows.Next() {
@@ -461,10 +471,17 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	// Fetch linked invoices
 	invoices := make([]LinkedInvoice, 0)
 	iRows, err := s.pool.Query(ctx,
-		`SELECT id::text, invoice_number, title, status, total, amount_due, amount_paid, due_date::text, created_at
-		 FROM invoices
-		 WHERE account_id = $1 AND deleted_at IS NULL
-		 ORDER BY created_at DESC`, companyID)
+		`SELECT i.id::text, i.invoice_number,
+		        NULL::text AS title,
+		        i.status,
+		        COALESCE(i.total, 0)::float8,
+		        COALESCE(i.total, 0)::float8 AS amount_due,
+		        0::float8 AS amount_paid,
+		        i.due_date::text,
+		        i.created_at
+		 FROM invoices i
+		 WHERE i.account_id = $1 AND i.deleted_at IS NULL
+		 ORDER BY i.created_at DESC`, companyID)
 	if err == nil {
 		defer iRows.Close()
 		for iRows.Next() {
@@ -495,10 +512,15 @@ func (s *store) getFullProfile(ctx context.Context, orgID, companyID string) (Fu
 	// Fetch linked leads
 	leads := make([]LinkedLead, 0)
 	lRows, err := s.pool.Query(ctx,
-		`SELECT id::text, first_name, last_name, email, phone, title, stage, value, created_at
-		 FROM leads
-		 WHERE account_id = $1 AND deleted_at IS NULL
-		 ORDER BY created_at DESC`, companyID)
+		`SELECT l.id::text,
+		        COALESCE(l.contact_name, ''),
+		        NULL::text AS last_name,
+		        l.email, l.phone, l.job_title,
+		        l.status, l.value_estimate,
+		        l.created_at
+		 FROM leads l
+		 WHERE l.account_id = $1 AND l.deleted_at IS NULL
+		 ORDER BY l.created_at DESC`, companyID)
 	if err == nil {
 		defer lRows.Close()
 		for lRows.Next() {
