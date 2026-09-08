@@ -58,7 +58,6 @@ func (n *Notifier) Store() *Store {
 	return n.store
 }
 
-
 // DealMoved emails the mover's colleagues that a card changed column.
 //
 // Delivery happens on a detached goroutine: a drag-and-drop should feel
@@ -80,7 +79,7 @@ func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv Deal
 	go func() {
 		defer cancel()
 
-		to, err := n.orgRecipients(sendCtx, orgID, actorID)
+		to, err := n.orgRecipients(sendCtx, orgID)
 		if err != nil {
 			log.Printf("notify: could not resolve recipients for deal %s: %v", mv.DealID, err)
 			return
@@ -88,26 +87,32 @@ func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv Deal
 		if len(to) == 0 {
 			return
 		}
-		company, currency := n.details(sendCtx, orgID, mv.AccountID)
+		company, currency, actor := n.details(sendCtx, orgID, mv.AccountID, actorID)
 		if err := n.mail.Send(sendCtx, mailer.Message{
 			To:      to,
 			Subject: dealMovedSubject(mv),
-			Body:    n.dealMovedBody(mv, company, currency),
+			Body:    n.dealMovedBody(mv, company, currency, actor),
 		}); err != nil {
 			log.Printf("notify: deal %s move email failed: %v", mv.DealID, err)
 		}
 	}()
 }
 
-// orgRecipients lists the addresses of everyone in the organization except the
-// person who performed the action — telling someone what they just did is noise.
-func (n *Notifier) orgRecipients(ctx context.Context, orgID, actorID string) ([]string, error) {
+// orgRecipients lists everyone in the organization, the person who moved the
+// card included.
+//
+// The join onto profiles is what "every profile in the organization" means here:
+// profiles carry no email of their own, so an address is reachable only through
+// the login account it belongs to. A profile with no account cannot be emailed,
+// and is skipped rather than silently counted.
+func (n *Notifier) orgRecipients(ctx context.Context, orgID string) ([]string, error) {
 	rows, err := n.pool.Query(ctx,
-		`SELECT email FROM users
-		  WHERE org_id = $1
-		    AND ($2 = '' OR id <> $2::uuid)
-		    AND email <> ''
-		  ORDER BY email`, orgID, actorID)
+		`SELECT u.email
+		   FROM users u
+		   JOIN profiles p ON p.id = u.id
+		  WHERE u.org_id = $1
+		    AND u.email <> ''
+		  ORDER BY u.email`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,16 +143,22 @@ func dealMovedSubject(mv DealMove) string {
 // details resolves the labels the email shows but the board response does not
 // carry. A failure here is not fatal: a notification missing a company name is
 // worth far more than one that never arrives.
-func (n *Notifier) details(ctx context.Context, orgID, companyID string) (company, currency string) {
+//
+// The actor is resolved here too. Now that the mail goes to the whole
+// organization — the mover included — "Someone moved a deal" is not good enough:
+// the first thing a reader needs is who did it.
+func (n *Notifier) details(ctx context.Context, orgID, accountID, actorID string) (company, currency, actor string) {
 	currency = "USD"
 	err := n.pool.QueryRow(ctx,
 		`SELECT COALESCE((SELECT name FROM accounts WHERE id = $2::uuid), ''),
-		        COALESCE((SELECT currency FROM organizations WHERE id = $1), 'USD')`,
-		orgID, nilIfEmpty(companyID)).Scan(&company, &currency)
+		        COALESCE((SELECT currency FROM organizations WHERE id = $1), 'USD'),
+		        COALESCE((SELECT COALESCE(NULLIF(btrim(u.name), ''), u.email)
+		                    FROM users u WHERE u.id = $3::uuid), '')`,
+		orgID, nilIfEmpty(accountID), nilIfEmpty(actorID)).Scan(&company, &currency, &actor)
 	if err != nil {
 		log.Printf("notify: could not resolve deal labels: %v", err)
 	}
-	return company, currency
+	return company, currency, actor
 }
 
 func nilIfEmpty(s string) *string {
@@ -157,10 +168,15 @@ func nilIfEmpty(s string) *string {
 	return &s
 }
 
-func (n *Notifier) dealMovedBody(mv DealMove, company, currency string) string {
+func (n *Notifier) dealMovedBody(mv DealMove, company, currency, actor string) string {
 	var b strings.Builder
 
-	who := mv.ActorName
+	// The resolved name wins; DealMove.ActorName is the caller's override, and
+	// "Someone" is the last resort rather than the usual case.
+	who := actor
+	if who == "" {
+		who = mv.ActorName
+	}
 	if who == "" {
 		who = "Someone"
 	}

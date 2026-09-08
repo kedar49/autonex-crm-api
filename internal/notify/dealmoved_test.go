@@ -48,9 +48,12 @@ func TestSubjectFallsBackToTheRawStage(t *testing.T) {
 
 func TestBodyCarriesTheChangeAndTheLink(t *testing.T) {
 	n := &Notifier{webAppURL: "https://crm.example.com/"}
-	body := n.dealMovedBody(move(), "Acme Ltd", "INR")
+	body := n.dealMovedBody(move(), "Acme Ltd", "INR", "Karan Paigude")
 
 	for _, want := range []string{
+		// Everyone in the org now gets this mail, the mover included, so the
+		// message has to say who acted rather than "Someone".
+		"Karan Paigude moved a deal",
 		"Acme rollout",
 		"Acme Ltd",
 		"INR 1250.00",
@@ -71,7 +74,7 @@ func TestBodyOmitsEmptyFields(t *testing.T) {
 	n := &Notifier{}
 	mv := move()
 	mv.Amount = 0
-	body := n.dealMovedBody(mv, "", "USD")
+	body := n.dealMovedBody(mv, "", "USD", "")
 
 	if strings.Contains(body, "Company:") {
 		t.Errorf("company line rendered with no company:\n%s", body)

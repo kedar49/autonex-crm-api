@@ -32,7 +32,8 @@ type Handler struct {
 // depends on the capability rather than the integrations service.
 type MeetingBooker interface {
 	BookCall(ctx context.Context, userID, title string, startAt time.Time,
-		duration time.Duration, leadID, dealID string) (integrations.Meeting, error)
+		duration time.Duration, leadID, dealID string,
+		attendees []string) (integrations.Meeting, error)
 }
 
 // advanceResponse carries the updated lead and, when one was booked, the meeting.
@@ -147,7 +148,7 @@ func (h *Handler) advance(w http.ResponseWriter, r *http.Request) {
 		}
 		booked, err := h.meetings.BookCall(ctx, middleware.UserID(ctx),
 			"Call with "+leadLabel(existing), *adv.MeetingAt,
-			time.Duration(minutes)*time.Minute, leadID, "")
+			time.Duration(minutes)*time.Minute, leadID, "", invitees(adv))
 		if err != nil {
 			if errors.Is(err, integrations.ErrNotConnected) {
 				httpx.WriteError(w, http.StatusPreconditionRequired,

@@ -65,12 +65,12 @@ type Meeting struct {
 // BookCall creates a Google Calendar event with a Meet link on the caller's own
 // calendar and records it against the lead or deal.
 //
-// Attendees are deliberately not set: the meeting lands on the organiser's
-// calendar and the link is theirs to share, so booking a call never sends
-// anything to the customer by itself.
+// attendees is the list a person confirmed in the dialog. Google emails exactly
+// these addresses and nobody else; an empty list books the meeting privately on
+// the organiser's calendar, which is what happens when nothing was confirmed.
 func (s *Service) BookCall(
 	ctx context.Context, userID, title string, startAt time.Time, duration time.Duration,
-	leadID, dealID string,
+	leadID, dealID string, attendees []string,
 ) (Meeting, error) {
 	tok, err := s.store.token(ctx, userID, "google")
 	if err != nil {
@@ -97,10 +97,11 @@ func (s *Service) BookCall(
 
 	endAt := startAt.Add(duration)
 	res, err := s.calendar.CreateEvent(ctx, oauth2.NewClient(ctx, src), google.CalendarEventInput{
-		Summary:  title,
-		StartAt:  startAt,
-		EndAt:    endAt,
-		TimeZone: s.cfg.Timezone,
+		Summary:   title,
+		StartAt:   startAt,
+		EndAt:     endAt,
+		TimeZone:  s.cfg.Timezone,
+		Attendees: attendees,
 	})
 	if err != nil {
 		return Meeting{}, err

@@ -56,11 +56,15 @@ func (r *CalendarEventResponse) MeetLink() string {
 
 type Client struct {
 	httpClient *http.Client
+	// baseURL is the Calendar API root. Overridden in tests; there is no reason
+	// to change it in production.
+	baseURL string
 }
 
 func NewClient() *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 15 * time.Second},
+		baseURL:    "https://www.googleapis.com",
 	}
 }
 
@@ -111,12 +115,25 @@ func (c *Client) CreateEvent(ctx context.Context, doer *http.Client, input Calen
 		return nil, err
 	}
 
-	// conferenceDataVersion=1 is what makes Google honour the createRequest
-	// above; without it the event is created silently without a Meet.
-	const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events" +
-		"?conferenceDataVersion=1"
+	// Two query parameters carry the whole feature:
+	//
+	//   conferenceDataVersion=1 makes Google honour the createRequest above;
+	//     without it the event is created silently with no Meet.
+	//   sendUpdates=all makes Google email the attendees; without it they are
+	//     listed on the event and never told about it, so the invite is not an
+	//     invite. "none" when nobody is invited keeps an internal booking silent.
+	send := "none"
+	if len(input.Attendees) > 0 {
+		send = "all"
+	}
+	base := c.baseURL
+	if base == "" {
+		base = "https://www.googleapis.com"
+	}
+	endpoint := base + "/calendar/v3/calendars/primary/events" +
+		"?conferenceDataVersion=1&sendUpdates=" + send
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

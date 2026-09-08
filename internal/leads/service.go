@@ -89,6 +89,12 @@ type Advance struct {
 	MeetingAt *time.Time `json:"meetingAt"`
 	// MeetingMinutes is the meeting length; 30 when unset.
 	MeetingMinutes int `json:"meetingMinutes"`
+
+	// Attendees are the addresses to invite to the meeting, and InviteConfirmed
+	// is the person saying yes to that list. Attendees without the confirmation
+	// are ignored: nothing reaches a customer unless someone chose to send it.
+	Attendees       []string `json:"attendees"`
+	InviteConfirmed bool     `json:"inviteConfirmed"`
 }
 
 // Page is one page of leads plus the counts the funnel strip and filter pills need.
