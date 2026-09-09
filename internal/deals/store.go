@@ -5,11 +5,11 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/go-crm/services/internal/delivery"
 	"github.com/go-crm/services/pkg/middleware"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,12 +18,6 @@ var (
 	ErrNotFound = errors.New("deal not found")
 	// ErrRefNotFound means a referenced owner or contact doesn't exist.
 	ErrRefNotFound = errors.New("referenced record is not in this organization")
-)
-
-const (
-	pgInvalidTextRepr     = "22P02" // e.g. "abc" where a UUID is expected
-	pgCheckViolation      = "23514" // the stage CHECK constraint
-	pgForeignKeyViolation = "23503"
 )
 
 // Deal is the module's view of a row, including the denormalized owner and
@@ -230,7 +224,7 @@ func (s *store) leadBelongsToAccount(ctx context.Context, leadID, accountID stri
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
-	if isPgCode(err, pgInvalidTextRepr) {
+	if database.IsInvalidTextRepr(err) {
 		return false, nil
 	}
 	return ok, err
@@ -276,7 +270,7 @@ func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error)
 		err := s.pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) OR EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, id).Scan(&exists)
 		if err != nil {
-			if isPgCode(err, pgInvalidTextRepr) {
+			if database.IsInvalidTextRepr(err) {
 				return false, nil
 			}
 			return false, err
@@ -287,7 +281,7 @@ func (s *store) refInOrg(ctx context.Context, table, _, id string) (bool, error)
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return false, nil
 		}
 		return false, err
@@ -346,20 +340,15 @@ func translate(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
-	case isPgCode(err, pgForeignKeyViolation):
+	case database.IsForeignKeyViolation(err):
 		return ErrRefNotFound
-	case isPgCode(err, pgCheckViolation):
+	case database.IsCheckViolation(err):
 		// Only the stage CHECK can fire here; the service validates stages
 		// first, so this is the belt to that braces.
 		return ErrNotFound
 	default:
 		return err
 	}
-}
-
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
 }

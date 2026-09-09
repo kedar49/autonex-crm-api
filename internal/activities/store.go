@@ -11,8 +11,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,12 +23,6 @@ var (
 	ErrRefNotFound = errors.New("referenced record is not in this organization")
 	// ErrSystemImmutable means someone tried to edit or delete a system event.
 	ErrSystemImmutable = errors.New("system events cannot be changed")
-)
-
-const (
-	pgInvalidTextRepr     = "22P02"
-	pgForeignKeyViolation = "23503"
-	pgCheckViolation      = "23514"
 )
 
 // Activity is one entry in the log.
@@ -207,7 +201,7 @@ func (s *store) explainWriteMiss(ctx context.Context, orgID, id string) error {
 	err := s.pool.QueryRow(ctx,
 		`SELECT type FROM activities WHERE id = $1`, id).Scan(&kind)
 	switch {
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
 	case err != nil:
 		return err
@@ -224,7 +218,7 @@ func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, er
 		err := s.pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) OR EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, id).Scan(&exists)
 		if err != nil {
-			if isPgCode(err, pgInvalidTextRepr) {
+			if database.IsInvalidTextRepr(err) {
 				return false, nil
 			}
 			return false, err
@@ -235,7 +229,7 @@ func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, er
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return false, nil
 		}
 		return false, err
@@ -264,20 +258,15 @@ func translate(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
-	case isPgCode(err, pgForeignKeyViolation):
+	case database.IsForeignKeyViolation(err):
 		return ErrRefNotFound
-	case isPgCode(err, pgCheckViolation):
+	case database.IsCheckViolation(err):
 		return ErrNotFound
 	default:
 		return err
 	}
-}
-
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
 }
 
 func nilIfEmpty(s string) *string {

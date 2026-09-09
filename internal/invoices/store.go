@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,13 +25,6 @@ var (
 	ErrNotPayable = errors.New("only an issued invoice can take a payment")
 	// ErrQuoteNotInvoiceable means the quote is missing, not accepted, or already billed.
 	ErrQuoteNotInvoiceable = errors.New("that quote cannot be invoiced")
-)
-
-const (
-	pgInvalidTextRepr     = "22P02"
-	pgCheckViolation      = "23514"
-	pgUniqueViolation     = "23505"
-	pgForeignKeyViolation = "23503"
 )
 
 // Item is one line of an invoice.
@@ -342,7 +335,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 		 RETURNING status`,
 		id, in.AccountID, in.OwnerUserID, in.DueDate).Scan(&status)
 
-	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return s.explainWriteMiss(ctx, orgID, id)
 	}
 	if err != nil {
@@ -415,7 +408,7 @@ func (s *store) addPayment(ctx context.Context, orgID, invoiceID string, in Paym
 	err = tx.QueryRow(ctx,
 		`SELECT status FROM invoices WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
 		invoiceID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return ErrNotFound
 	}
 	if err != nil {
@@ -478,7 +471,7 @@ func (s *store) currentStatus(ctx context.Context, orgID, id string) (string, er
 	var status string
 	err := s.pool.QueryRow(ctx,
 		`SELECT status FROM invoices WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return "", ErrNotFound
 	}
 	return status, err
@@ -515,7 +508,7 @@ func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, er
 		err := s.pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM users WHERE id = $1) OR EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, id).Scan(&exists)
 		if err != nil {
-			if isPgCode(err, pgInvalidTextRepr) {
+			if database.IsInvalidTextRepr(err) {
 				return false, nil
 			}
 			return false, err
@@ -526,7 +519,7 @@ func (s *store) refInOrg(ctx context.Context, table, orgID, id string) (bool, er
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, id).Scan(&exists)
 	if err != nil {
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return false, nil
 		}
 		return false, err
@@ -590,21 +583,16 @@ func translate(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
-	case isPgCode(err, pgUniqueViolation):
+	case database.IsUniqueViolation(err):
 		// The only unique constraint a caller can trip is one-invoice-per-quote.
 		return ErrQuoteNotInvoiceable
-	case isPgCode(err, pgForeignKeyViolation):
+	case database.IsForeignKeyViolation(err):
 		return ErrRefNotFound
-	case isPgCode(err, pgCheckViolation):
+	case database.IsCheckViolation(err):
 		return ErrNotFound
 	default:
 		return err
 	}
-}
-
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
 }

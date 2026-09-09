@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-crm/services/internal/delivery"
+	"github.com/go-crm/services/pkg/database"
 	"github.com/go-crm/services/pkg/middleware"
 	"github.com/jackc/pgx/v5"
 )
@@ -141,7 +142,7 @@ func (s *store) convert(
 		&leadNotes, &leadLocation, &productInterest,
 	)
 
-	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return Conversion{}, s.explainConvertMiss(ctx, orgID, leadID)
 	}
 	if err != nil {
@@ -292,7 +293,7 @@ func (s *store) explainConvertMiss(ctx context.Context, _, leadID string) error 
 	).Scan(&status)
 
 	switch {
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
 	case err != nil:
 		return err

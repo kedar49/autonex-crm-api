@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -63,7 +64,7 @@ func (s *store) fromQuote(
 		quoteID,
 	).Scan(&status, &currency, &company, &owner)
 
-	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return "", ErrQuoteNotInvoiceable
 	}
 	if err != nil {
