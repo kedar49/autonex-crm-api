@@ -3,7 +3,6 @@ package activities
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +10,7 @@ import (
 	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 // Handler exposes the activity log's HTTP API.
@@ -38,7 +38,7 @@ func (h *Handler) Routes() chi.Router {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit, _ := paging.Params(r)
 
 	items, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), Filter{
 		LeadID:    q.Get("leadId"),

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-crm/services/pkg/apperr"
+	"github.com/go-crm/services/pkg/paging"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -360,14 +361,5 @@ func validate(in Input) error {
 
 // clampPage keeps a client from asking for an unbounded or nonsensical page.
 func clampPage(limit, offset int) (int, int) {
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	return limit, offset
+	return paging.Clamp(limit, offset, defaultLimit, maxLimit)
 }

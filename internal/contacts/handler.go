@@ -3,7 +3,6 @@ package contacts
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +10,7 @@ import (
 	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 // Handler exposes the contacts module's HTTP API.
@@ -40,9 +40,7 @@ func (h *Handler) Routes() chi.Router {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))   // 0 → service default
-	offset, _ := strconv.Atoi(q.Get("offset")) // 0 → first page
+	limit, offset := paging.Params(r)
 
 	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), limit, offset)
 	if err != nil {

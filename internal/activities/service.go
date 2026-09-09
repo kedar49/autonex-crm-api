@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-crm/services/pkg/apperr"
+	"github.com/go-crm/services/pkg/paging"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,12 +47,9 @@ func NewService(pool *pgxpool.Pool) *Service {
 
 // List returns a timeline, newest first.
 func (s *Service) List(ctx context.Context, orgID string, f Filter) ([]Activity, error) {
-	if f.Limit <= 0 {
-		f.Limit = defaultLimit
-	}
-	if f.Limit > maxLimit {
-		f.Limit = maxLimit
-	}
+	// The feed is unpaged — it is a timeline, not a table — so only the limit
+	// is bounded here and the offset is discarded.
+	f.Limit, _ = paging.Clamp(f.Limit, 0, defaultLimit, maxLimit)
 	return s.store.list(ctx, orgID, f)
 }
 
