@@ -25,7 +25,11 @@ const rowColumns = `
 	t.id::text, t.client, t.products, t.locations, t.total_cameras, t.status,
 	t.implementation_date, t.current_stages, t.key_contacts, t.next_steps,
 	t.notes, t.position,
-	t.deal_id::text, dl.title AS deal_title, dl.stage AS deal_stage,
+	-- dl.id, not t.deal_id: the join below drops deleted deals, so reading the
+	-- id off the join makes a row whose deal was retired report as unlinked
+	-- rather than as linked-to-nothing. Rows orphaned before deals started
+	-- unlinking on delete are covered by this too.
+	dl.id::text, dl.title AS deal_title, dl.stage AS deal_stage,
 	t.updated_by::text, u.name AS updated_by_name,
 	t.created_at, t.updated_at`
 

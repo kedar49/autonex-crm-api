@@ -176,8 +176,21 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 // Soft delete is also the honest model. A quote or invoice raised from a deal is
 // a financial record; it must keep pointing at where it came from. Every read in
 // this module already filters deleted_at, so a retired deal leaves the board.
+//
+// The tracker row is unlinked in the same transaction rather than left behind.
+// A row still pointing at a retired deal reads as linked to every query that
+// only checks deal_id, while the joins that do filter deleted_at return no title
+// and no stage — so the grid drew a deal column that was neither empty nor
+// filled in. Unlinking keeps the row (the installation is still real) and makes
+// it adoptable again by whatever deal replaces this one.
 func (s *store) delete(ctx context.Context, _ string, id string) error {
-	tag, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE deals SET deleted_at = now(), updated_at = now()
 		  WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
@@ -186,7 +199,11 @@ func (s *store) delete(ctx context.Context, _ string, id string) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+
+	if err := delivery.UnlinkDeal(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // move changes which column a card sits in.
