@@ -52,7 +52,7 @@ const deliveryStage = "delivery"
 // validDealStages mirrors deals.Stages.
 var validDealStages = map[string]bool{
 	"discovery": true, "site_assessment": true, "quote_sent": true,
-	"negotiation": true, "delivery": true, "won": true, "lost": true,
+	"negotiation": true, "delivery": true, "post_delivery": true, "won": true,
 }
 
 func normalizeDealStage(raw string) string {

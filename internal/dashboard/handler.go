@@ -141,7 +141,9 @@ func (h *Handler) build(ctx context.Context, orgID string) (Summary, error) {
 		for _, s := range stats {
 			counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Amount}
 		}
-		sum.Deals = rollUp(deals.Stages, "won", []string{"lost"}, counts)
+		// Nothing is "closed but not won" any more: the pipeline ends at won, so
+		// every stage before it counts as open.
+		sum.Deals = rollUp(deals.Stages, "won", nil, counts)
 		return nil
 	})
 

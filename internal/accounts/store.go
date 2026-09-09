@@ -162,8 +162,10 @@ func (s *store) delete(ctx context.Context, _, id string) error {
 
 	var contacts, deals int
 	if err := tx.QueryRow(ctx,
-		`SELECT (SELECT count(*) FROM contacts WHERE account_id = $1),
-		        (SELECT count(*) FROM deals    WHERE account_id = $1)`,
+		// Retired children do not count: a deal someone deleted must not keep the
+		// account undeletable forever.
+		`SELECT (SELECT count(*) FROM contacts WHERE account_id = $1 AND deleted_at IS NULL),
+		        (SELECT count(*) FROM deals    WHERE account_id = $1 AND deleted_at IS NULL)`,
 		id).Scan(&contacts, &deals); err != nil {
 		return translate(err)
 	}
