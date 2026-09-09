@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/go-crm/services/internal/delivery"
+	"github.com/go-crm/services/pkg/apperr"
+	"github.com/go-crm/services/pkg/database"
 	"github.com/go-crm/services/pkg/middleware"
 	"github.com/jackc/pgx/v5"
 )
@@ -78,11 +80,11 @@ func (s *Service) Convert(ctx context.Context, orgID, leadID string, in ConvertI
 	}
 	norm := normalizeDealStage(stageStr)
 	if !validDealStages[norm] {
-		return Conversion{}, invalid("unknown deal stage %q", stageStr)
+		return Conversion{}, apperr.Invalid("unknown deal stage %q", stageStr)
 	}
 
 	if in.Amount != nil && (*in.Amount < 0 || *in.Amount > 1e12) {
-		return Conversion{}, invalid("amount must be between 0 and 1,000,000,000,000")
+		return Conversion{}, apperr.Invalid("amount must be between 0 and 1,000,000,000,000")
 	}
 
 	rawTitle := in.Title
@@ -90,7 +92,7 @@ func (s *Service) Convert(ctx context.Context, orgID, leadID string, in ConvertI
 		rawTitle = in.DealTitle
 	}
 	if rawTitle != nil && len(strings.TrimSpace(*rawTitle)) > 160 {
-		return Conversion{}, invalid("deal name must be 160 characters or fewer")
+		return Conversion{}, apperr.Invalid("deal name must be 160 characters or fewer")
 	}
 
 	notes := in.Description
@@ -98,7 +100,7 @@ func (s *Service) Convert(ctx context.Context, orgID, leadID string, in ConvertI
 		notes = in.CallNotes
 	}
 	if notes != nil && len(*notes) > 5000 {
-		return Conversion{}, invalid("notes must be 5000 characters or fewer")
+		return Conversion{}, apperr.Invalid("notes must be 5000 characters or fewer")
 	}
 
 	return s.store.convert(ctx, orgID, leadID, in, norm)
@@ -141,7 +143,7 @@ func (s *store) convert(
 		&leadNotes, &leadLocation, &productInterest,
 	)
 
-	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return Conversion{}, s.explainConvertMiss(ctx, orgID, leadID)
 	}
 	if err != nil {
@@ -292,7 +294,7 @@ func (s *store) explainConvertMiss(ctx context.Context, _, leadID string) error 
 	).Scan(&status)
 
 	switch {
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
 	case err != nil:
 		return err

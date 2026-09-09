@@ -1,7 +1,6 @@
 package deals
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -136,15 +135,10 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "deal not found")
-	case errors.Is(err, ErrRefNotFound):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"that owner or contact is not part of your organization")
-	case IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "deal not found"},
+		httpx.Rule{Err: ErrRefNotFound, Status: http.StatusBadRequest,
+			Message: "that owner or contact is not part of your organization"},
+	)
 }

@@ -2,12 +2,12 @@ package notify
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 type Handler struct {
@@ -34,9 +34,7 @@ func (h *Handler) Routes() chi.Router {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, offset := paging.Params(r)
 
 	orgID := middleware.OrgID(r.Context())
 	userID := middleware.UserID(r.Context())

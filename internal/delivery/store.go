@@ -5,14 +5,13 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
-	pgInvalidTextRepr   = "22P02"
-	pgUniqueViolation   = "23505"
 	clientUniqueIdxName = "delivery_tracker_client_idx"
 )
 
@@ -155,7 +154,7 @@ func (s *store) delete(ctx context.Context, orgID, id string) error {
 		`DELETE FROM delivery_tracker WHERE org_id = $1 AND id = $2`, orgID, id)
 	if err != nil {
 		// A malformed uuid is a request for a row that cannot exist, not a 500.
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return ErrNotFound
 		}
 		return err
@@ -177,8 +176,8 @@ func (s *store) reorder(ctx context.Context, orgID string, ids []string) error {
 		   FROM unnest($2::uuid[]) WITH ORDINALITY AS o(id, ord)
 		  WHERE t.id = o.id AND t.org_id = $1`,
 		orgID, ids, positionStep)
-	if isPgCode(err, pgInvalidTextRepr) {
-		return invalid("one of those row ids is not valid")
+	if database.IsInvalidTextRepr(err) {
+		return apperr.Invalid("one of those row ids is not valid")
 	}
 	return err
 }
@@ -200,25 +199,13 @@ func mapWriteErr(err error) error {
 		return nil
 	case errors.Is(err, ErrNotFound):
 		return ErrNotFound
-	case isUniqueViolation(err, clientUniqueIdxName):
+	case database.IsUniqueViolationOn(err, clientUniqueIdxName):
 		return ErrClientTaken
-	case isPgCode(err, pgInvalidTextRepr):
+	case database.IsInvalidTextRepr(err):
 		return ErrNotFound
 	default:
 		return err
 	}
-}
-
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
-}
-
-func isUniqueViolation(err error, constraint string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) &&
-		pgErr.Code == pgUniqueViolation &&
-		pgErr.ConstraintName == constraint
 }
 
 // upsertMany applies a confirmed import in one transaction: either the whole

@@ -10,10 +10,10 @@ package delivery
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,21 +32,6 @@ const maxRows = 2000
 // positionStep leaves room between rows so inserting one does not renumber the
 // table.
 const positionStep = 1000
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // Row is one line of the tracker.
 //
@@ -148,10 +133,10 @@ func (s *Service) Delete(ctx context.Context, orgID, id string) error {
 // a red banner.
 func (s *Service) Reorder(ctx context.Context, orgID string, ids []string) error {
 	if len(ids) == 0 {
-		return invalid("send the row order")
+		return apperr.Invalid("send the row order")
 	}
 	if len(ids) > maxRows {
-		return invalid("too many rows in one reorder")
+		return apperr.Invalid("too many rows in one reorder")
 	}
 	return s.store.reorder(ctx, orgID, ids)
 }
@@ -161,13 +146,13 @@ func (s *Service) Reorder(ctx context.Context, orgID string, ids []string) error
 func validate(in Input) (Input, error) {
 	in.Client = strings.TrimSpace(in.Client)
 	if in.Client == "" {
-		return Input{}, invalid("client is required")
+		return Input{}, apperr.Invalid("client is required")
 	}
 	if len([]rune(in.Client)) > 200 {
-		return Input{}, invalid("client name is too long")
+		return Input{}, apperr.Invalid("client name is too long")
 	}
 	if in.TotalCameras != nil && *in.TotalCameras < 0 {
-		return Input{}, invalid("total cameras cannot be negative")
+		return Input{}, apperr.Invalid("total cameras cannot be negative")
 	}
 
 	in.Products = trimOptional(in.Products)

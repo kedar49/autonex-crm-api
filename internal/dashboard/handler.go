@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/go-crm/services/internal/deals"
 	"github.com/go-crm/services/internal/invoices"
@@ -94,56 +95,97 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, sum)
 }
 
+// dashboardFanOut caps how many of the summary's queries run at once.
+//
+// The eight pieces below are fully independent, so the page used to pay for
+// them end to end — eight sequential round-trips, each waiting on the last, on
+// the one request that gates the whole landing page.
+//
+// The limit matters as much as the concurrency. The pool holds a small, fixed
+// number of connections (see pkg/database), so an unbounded fan-out would let a
+// single dashboard load take every one of them and stall every other request
+// behind it. Half the pool is the compromise: most of the latency win, and
+// there is always room left for the requests the dashboard itself kicks off
+// once it renders.
+const dashboardFanOut = 4
+
 func (h *Handler) build(ctx context.Context, orgID string) (Summary, error) {
 	var sum Summary
 
-	leadStats, err := h.leads.Stats(ctx, orgID)
-	if err != nil {
-		return Summary{}, err
-	}
-	counts := make(map[string]StageSummary, len(leadStats))
-	for _, s := range leadStats {
-		counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Value}
-	}
-	sum.Leads = rollUp(leads.Stages, "closed", []string{"not interested"}, counts)
+	// Each goroutine writes one distinct field of sum and reads none of the
+	// others, so no lock is needed. Keep it that way: a piece that starts
+	// depending on another's result has to move out of the group, or it will
+	// read a field that has not been written yet.
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(dashboardFanOut)
 
-	dealStats, err := h.deals.Stats(ctx, orgID)
-	if err != nil {
-		return Summary{}, err
-	}
-	counts = make(map[string]StageSummary, len(dealStats))
-	for _, s := range dealStats {
-		counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Amount}
-	}
-	sum.Deals = rollUp(deals.Stages, "won", []string{"lost"}, counts)
+	g.Go(func() error {
+		stats, err := h.leads.Stats(ctx, orgID)
+		if err != nil {
+			return err
+		}
+		counts := make(map[string]StageSummary, len(stats))
+		for _, s := range stats {
+			counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Value}
+		}
+		sum.Leads = rollUp(leads.Stages, "closed", []string{"not interested"}, counts)
+		return nil
+	})
 
-	quoteStats, err := h.quotes.Stats(ctx, orgID)
-	if err != nil {
-		return Summary{}, err
-	}
-	counts = make(map[string]StageSummary, len(quoteStats))
-	for _, s := range quoteStats {
-		counts[s.Status] = StageSummary{Stage: s.Status, Count: s.Count, Value: s.Value}
-	}
-	sum.Quotes = rollUp(quotes.Statuses, "approved", []string{"rejected", "expired"}, counts)
+	g.Go(func() error {
+		stats, err := h.deals.Stats(ctx, orgID)
+		if err != nil {
+			return err
+		}
+		counts := make(map[string]StageSummary, len(stats))
+		for _, s := range stats {
+			counts[s.Stage] = StageSummary{Stage: s.Stage, Count: s.Count, Value: s.Amount}
+		}
+		sum.Deals = rollUp(deals.Stages, "won", []string{"lost"}, counts)
+		return nil
+	})
 
-	if sum.Invoices, err = h.invoices.Stats(ctx, orgID); err != nil {
-		return Summary{}, err
-	}
+	g.Go(func() error {
+		stats, err := h.quotes.Stats(ctx, orgID)
+		if err != nil {
+			return err
+		}
+		counts := make(map[string]StageSummary, len(stats))
+		for _, s := range stats {
+			counts[s.Status] = StageSummary{Stage: s.Status, Count: s.Count, Value: s.Value}
+		}
+		sum.Quotes = rollUp(quotes.Statuses, "approved", []string{"rejected", "expired"}, counts)
+		return nil
+	})
 
-	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM contacts WHERE deleted_at IS NULL`).Scan(&sum.Contacts); err != nil {
-		return Summary{}, err
-	}
-	if err := h.pool.QueryRow(ctx,
-		`SELECT count(*) FROM profiles`).Scan(&sum.Members); err != nil {
-		return Summary{}, err
-	}
+	g.Go(func() error {
+		var err error
+		sum.Invoices, err = h.invoices.Stats(ctx, orgID)
+		return err
+	})
 
-	if sum.Attention, err = h.attention(ctx, orgID); err != nil {
-		return Summary{}, err
-	}
-	if sum.Recent, err = h.recent(ctx, orgID); err != nil {
+	g.Go(func() error {
+		return h.pool.QueryRow(ctx,
+			`SELECT count(*) FROM contacts WHERE deleted_at IS NULL`).Scan(&sum.Contacts)
+	})
+
+	g.Go(func() error {
+		return h.pool.QueryRow(ctx, `SELECT count(*) FROM profiles`).Scan(&sum.Members)
+	})
+
+	g.Go(func() error {
+		var err error
+		sum.Attention, err = h.attention(ctx, orgID)
+		return err
+	})
+
+	g.Go(func() error {
+		var err error
+		sum.Recent, err = h.recent(ctx, orgID)
+		return err
+	})
+
+	if err := g.Wait(); err != nil {
 		return Summary{}, err
 	}
 	return sum, nil

@@ -1,10 +1,8 @@
 package invoices
 
 import (
-	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +12,7 @@ import (
 	"github.com/go-crm/services/internal/pdf"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 // Handler exposes the invoices module's HTTP API.
@@ -51,8 +50,7 @@ func (h *Handler) Routes() chi.Router {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, offset := paging.Params(r)
 
 	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), q.Get("status"), limit, offset)
 	if err != nil {
@@ -240,24 +238,16 @@ func (h *Handler) downloadPDF(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "invoice not found")
-	case errors.Is(err, ErrNotDraft):
-		httpx.WriteError(w, http.StatusConflict,
-			"this invoice has been issued — void it and raise a new one instead")
-	case errors.Is(err, ErrNotPayable):
-		httpx.WriteError(w, http.StatusConflict,
-			"only an issued invoice can take a payment")
-	case errors.Is(err, ErrQuoteNotInvoiceable):
-		httpx.WriteError(w, http.StatusConflict,
-			"that quote must be accepted, and not already invoiced")
-	case errors.Is(err, ErrRefNotFound):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"a referenced account, contact, deal or owner is not part of your organization")
-	case IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "invoice not found"},
+		httpx.Rule{Err: ErrNotDraft, Status: http.StatusConflict,
+			Message: "this invoice has been issued — void it and raise a new one instead"},
+		httpx.Rule{Err: ErrNotPayable, Status: http.StatusConflict,
+			Message: "only an issued invoice can take a payment"},
+		httpx.Rule{Err: ErrQuoteNotInvoiceable, Status: http.StatusConflict,
+			Message: "that quote must be accepted, and not already invoiced"},
+		httpx.Rule{Err: ErrRefNotFound, Status: http.StatusBadRequest,
+			Message: "a referenced account, contact, deal or owner is not part of your organization"},
+	)
 }

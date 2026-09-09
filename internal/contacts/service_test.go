@@ -1,6 +1,10 @@
 package contacts
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-crm/services/pkg/apperr"
+)
 
 func ptr[T any](v T) *T { return &v }
 
@@ -85,7 +89,7 @@ func TestValidateRejects(t *testing.T) {
 			}
 			// The handler turns only ValidationError into a 400; anything else
 			// would surface as a 500.
-			if !IsValidation(err) {
+			if !apperr.IsValidation(err) {
 				t.Fatalf("err = %v, want a ValidationError", err)
 			}
 		})

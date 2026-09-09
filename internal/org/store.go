@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,8 +20,6 @@ var (
 	// ErrInviteInvalid covers an unknown, expired, or already-accepted token.
 	ErrInviteInvalid = errors.New("invitation is invalid or has expired")
 )
-
-const pgUniqueViolation = "23505"
 
 // Member is one user of an organization, as shown in the team list and the
 // lead-owner picker.
@@ -122,8 +120,7 @@ func (s *store) createInvitation(
 		orgID, email, tokenHash, invitedBy, expiresAt,
 	).Scan(&inv.ID, &inv.Email, &inv.ExpiresAt, &inv.CreatedAt, &inv.AcceptedAt)
 
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+	if database.IsUniqueViolation(err) {
 		return Invitation{}, ErrAlreadyInvited
 	}
 	return inv, err
@@ -202,8 +199,7 @@ func (s *store) acceptInvitation(ctx context.Context, tokenHash, name, passwordH
 		 RETURNING id::text`,
 		email, nilIfEmpty(name), orgID, passwordHash).Scan(&userID)
 
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+	if database.IsUniqueViolation(err) {
 		// Someone registered with this email between invite and acceptance.
 		return acceptedUser{}, ErrAlreadyMember
 	}

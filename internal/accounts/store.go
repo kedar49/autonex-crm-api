@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -35,11 +35,6 @@ var (
 	ErrOwnerNotFound = errors.New("owner is not a member of this organization")
 	// ErrInUse means contacts or deals still reference the account.
 	ErrInUse = errors.New("account is still referenced")
-)
-
-const (
-	pgInvalidTextRepr     = "22P02"
-	pgForeignKeyViolation = "23503"
 )
 
 // Account is the module's view of a row, plus the two counts a list needs to be
@@ -193,7 +188,7 @@ func (s *store) ownerInOrg(ctx context.Context, _, userID string) (bool, error) 
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM profiles WHERE id = $1)`, userID).Scan(&exists)
 	if err != nil {
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return false, nil
 		}
 		return false, err
@@ -221,18 +216,13 @@ func translate(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
+	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
 		return ErrNotFound
-	case isPgCode(err, pgForeignKeyViolation):
+	case database.IsForeignKeyViolation(err):
 		return ErrOwnerNotFound
 	default:
 		return err
 	}
-}
-
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
 }
 
 // --- Company Profile Extensions ---

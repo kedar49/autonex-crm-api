@@ -1,7 +1,6 @@
 package delivery
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -150,20 +149,14 @@ func (h *Handler) importCommit(w http.ResponseWriter, r *http.Request) {
 
 // writeErr maps a domain error to its status code; fallback is the 500 message.
 func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "that row no longer exists")
-	case errors.Is(err, ErrClientTaken):
-		httpx.WriteError(w, http.StatusConflict, "another row already tracks that client")
-	case errors.Is(err, ErrNoHeader):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"could not find a header row — the sheet needs a row of column names, including one for the client")
-	case errors.Is(err, ErrNoClientColumn):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"that sheet has no \"Client\" column, so its rows cannot be matched")
-	case IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "that row no longer exists"},
+		httpx.Rule{Err: ErrClientTaken, Status: http.StatusConflict,
+			Message: "another row already tracks that client"},
+		httpx.Rule{Err: ErrNoHeader, Status: http.StatusBadRequest,
+			Message: "could not find a header row — the sheet needs a row of column names, including one for the client"},
+		httpx.Rule{Err: ErrNoClientColumn, Status: http.StatusBadRequest,
+			Message: "that sheet has no \"Client\" column, so its rows cannot be matched"},
+	)
 }

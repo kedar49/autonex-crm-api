@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -22,13 +22,6 @@ var (
 	ErrAccountNotFound = errors.New("account not found")
 )
 
-// Postgres error codes we translate into domain errors.
-const (
-	pgUniqueViolation     = "23505"
-	pgInvalidTextRepr     = "22P02" // e.g. "abc" passed where a UUID is expected
-	pgForeignKeyViolation = "23503"
-)
-
 // Contact is the contacts module's view of a row in the contacts table.
 type Contact struct {
 	ID        string    `json:"id"`
@@ -40,8 +33,7 @@ type Contact struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// store is a hand-written pgx repository, matching the auth module's approach
-// (see internal/contacts/db/queries.sql for the sqlc-shaped reference).
+// store is a hand-written pgx repository, matching the auth module's approach.
 //
 // Every method takes orgID and every statement filters on it. That is the only
 // thing standing between two tenants' data, so it is not optional anywhere.
@@ -113,7 +105,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Contact
 func (s *store) delete(ctx context.Context, orgID, id string) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM contacts WHERE id = $1`, id)
 	if err != nil {
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return ErrNotFound
 		}
 		return err
@@ -133,7 +125,7 @@ func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool
 		`SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)`,
 		accountID).Scan(&exists)
 	if err != nil {
-		if isPgCode(err, pgInvalidTextRepr) {
+		if database.IsInvalidTextRepr(err) {
 			return false, nil // malformed id can't name an account
 		}
 		return false, err
@@ -153,19 +145,14 @@ func scanContact(row rowScanner) (Contact, error) {
 	case errors.Is(err, pgx.ErrNoRows):
 		return Contact{}, ErrNotFound
 	// A caller-supplied id that isn't a UUID is a miss, not a server error.
-	case isPgCode(err, pgInvalidTextRepr):
+	case database.IsInvalidTextRepr(err):
 		return Contact{}, ErrNotFound
-	case isPgCode(err, pgUniqueViolation):
+	case database.IsUniqueViolation(err):
 		return Contact{}, ErrEmailTaken
-	case isPgCode(err, pgForeignKeyViolation):
+	case database.IsForeignKeyViolation(err):
 		return Contact{}, ErrAccountNotFound
 	case err != nil:
 		return Contact{}, err
 	}
 	return c, nil
-}
-
-func isPgCode(err error, code string) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == code
 }

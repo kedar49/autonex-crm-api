@@ -1,15 +1,14 @@
 package activities
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 // Handler exposes the activity log's HTTP API.
@@ -37,7 +36,7 @@ func (h *Handler) Routes() chi.Router {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit, _ := paging.Params(r)
 
 	items, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), Filter{
 		LeadID:    q.Get("leadId"),
@@ -91,18 +90,12 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "activity not found")
-	case errors.Is(err, ErrSystemImmutable):
-		httpx.WriteError(w, http.StatusConflict,
-			"this entry was recorded automatically and cannot be changed")
-	case errors.Is(err, ErrRefNotFound):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"a referenced record is not part of your organization")
-	case IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "activity not found"},
+		httpx.Rule{Err: ErrSystemImmutable, Status: http.StatusConflict,
+			Message: "this entry was recorded automatically and cannot be changed"},
+		httpx.Rule{Err: ErrRefNotFound, Status: http.StatusBadRequest,
+			Message: "a referenced record is not part of your organization"},
+	)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,6 +13,7 @@ import (
 	"github.com/go-crm/services/internal/integrations"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 // Handler exposes the leads module's HTTP API.
@@ -66,8 +66,7 @@ func (h *Handler) Routes() chi.Router {
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, offset := paging.Params(r)
 
 	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), q.Get("filter"), limit, offset)
 	if err != nil {
@@ -261,17 +260,12 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "lead not found")
-	case errors.Is(err, ErrRefNotFound):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"that owner, company or contact is not part of your organization")
-	case errors.Is(err, ErrAlreadyConverted):
-		httpx.WriteError(w, http.StatusConflict, "this lead has already been converted")
-	case IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "lead not found"},
+		httpx.Rule{Err: ErrRefNotFound, Status: http.StatusBadRequest,
+			Message: "that owner, company or contact is not part of your organization"},
+		httpx.Rule{Err: ErrAlreadyConverted, Status: http.StatusConflict,
+			Message: "this lead has already been converted"},
+	)
 }

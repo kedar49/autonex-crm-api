@@ -1,15 +1,14 @@
 package contacts
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
+	"github.com/go-crm/services/pkg/paging"
 )
 
 // Handler exposes the contacts module's HTTP API.
@@ -39,9 +38,7 @@ func (h *Handler) Routes() chi.Router {
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))   // 0 → service default
-	offset, _ := strconv.Atoi(q.Get("offset")) // 0 → first page
+	limit, offset := paging.Params(r)
 
 	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), limit, offset)
 	if err != nil {
@@ -96,16 +93,12 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 
 // writeErr maps a domain error to its status code; fallback is the 500 message.
 func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "contact not found")
-	case errors.Is(err, ErrEmailTaken):
-		httpx.WriteError(w, http.StatusConflict, "a contact with that email already exists")
-	case errors.Is(err, ErrAccountNotFound):
-		httpx.WriteError(w, http.StatusBadRequest, "unknown account")
-	case IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "contact not found"},
+		httpx.Rule{Err: ErrEmailTaken, Status: http.StatusConflict,
+			Message: "a contact with that email already exists"},
+		httpx.Rule{Err: ErrAccountNotFound, Status: http.StatusBadRequest,
+			Message: "unknown account"},
+	)
 }

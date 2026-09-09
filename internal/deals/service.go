@@ -2,11 +2,10 @@ package deals
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,21 +16,6 @@ var Stages = []string{"discovery", "site_assessment", "quote_sent", "negotiation
 // maxBoard caps a board fetch — well above a realistic pipeline, low enough that
 // one org can't pull the whole table into memory.
 const maxBoard = 500
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // Input is the writable shape of a deal.
 type Input struct {
@@ -132,7 +116,7 @@ func NormalizeStage(raw string) string {
 func (s *Service) Move(ctx context.Context, orgID, id string, mv Move) (Deal, string, error) {
 	mv.Stage = NormalizeStage(mv.Stage)
 	if !ValidStage(mv.Stage) {
-		return Deal{}, "", invalid("unknown stage %q", mv.Stage)
+		return Deal{}, "", apperr.Invalid("unknown stage %q", mv.Stage)
 	}
 	return s.store.move(ctx, orgID, id, mv.Stage, mv.Index)
 }
@@ -192,7 +176,7 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 			return Input{}, err
 		}
 		if !ok {
-			return Input{}, invalid("that lead belongs to a different account")
+			return Input{}, apperr.Invalid("that lead belongs to a different account")
 		}
 	}
 	return in, nil
@@ -239,28 +223,28 @@ func trimmedOrNil(v *string) *string {
 func validate(in Input) error {
 	switch {
 	case in.Title == "":
-		return invalid("title is required")
+		return apperr.Invalid("title is required")
 	case len(in.Title) > 160:
-		return invalid("title must be 160 characters or fewer")
+		return apperr.Invalid("title must be 160 characters or fewer")
 	case !ValidStage(in.Stage):
-		return invalid("unknown stage %q", in.Stage)
+		return apperr.Invalid("unknown stage %q", in.Stage)
 	case in.Amount < 0:
-		return invalid("amount cannot be negative")
+		return apperr.Invalid("amount cannot be negative")
 	case in.Amount > 1e12:
-		return invalid("amount must be 1,000,000,000,000 or less")
+		return apperr.Invalid("amount must be 1,000,000,000,000 or less")
 	case in.TotalCameras != nil && *in.TotalCameras < 0:
-		return invalid("number of cameras cannot be negative")
+		return apperr.Invalid("number of cameras cannot be negative")
 	case in.TotalCameras != nil && *in.TotalCameras > 1_000_000:
-		return invalid("number of cameras must be 1,000,000 or fewer")
+		return apperr.Invalid("number of cameras must be 1,000,000 or fewer")
 	}
 	if in.Description != nil && len(*in.Description) > 5000 {
-		return invalid("description must be 5000 characters or fewer")
+		return apperr.Invalid("description must be 5000 characters or fewer")
 	}
 	if in.Location != nil && len(*in.Location) > 500 {
-		return invalid("location must be 500 characters or fewer")
+		return apperr.Invalid("location must be 500 characters or fewer")
 	}
 	if in.Products != nil && len(*in.Products) > 500 {
-		return invalid("products must be 500 characters or fewer")
+		return apperr.Invalid("products must be 500 characters or fewer")
 	}
 	return nil
 }

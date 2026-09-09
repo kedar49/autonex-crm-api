@@ -1,10 +1,10 @@
 // Package integrations owns the third-party accounts a user connects to the
 // CRM, and the OAuth dance that establishes them.
 //
-// The sqlc package under db/ targets an older shape of integration_connections
-// (org_id, encrypted_tokens) that this deployment's table does not have; this
-// hand-written store speaks to the columns that actually exist, the same way the
-// auth module does.
+// The store is hand-written pgx, the same way the auth module does it. A
+// generated package under db/ once shadowed it, built against an older shape of
+// integration_connections (org_id, encrypted_tokens) that this deployment's
+// table never had; it was unreachable and has been removed.
 package integrations
 
 import (

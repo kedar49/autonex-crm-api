@@ -1,7 +1,6 @@
 package integrations
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -149,10 +148,8 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request, provider, err
 
 // writeErr maps the module's errors onto status codes.
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	if errors.Is(err, ErrNotConnected) {
-		httpx.WriteError(w, http.StatusPreconditionRequired,
-			"connect your Google account first")
-		return
-	}
-	httpx.WriteServerError(w, fallback, err)
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotConnected, Status: http.StatusPreconditionRequired,
+			Message: "connect your Google account first"},
+	)
 }

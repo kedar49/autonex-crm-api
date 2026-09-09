@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/go-crm/services/internal/leads"
+	"github.com/go-crm/services/pkg/apperr"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -50,7 +51,7 @@ func TestValidate(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected rejection")
 			}
-			if !IsValidation(err) {
+			if !apperr.IsValidation(err) {
 				t.Fatalf("err = %v, want a ValidationError", err)
 			}
 		})
