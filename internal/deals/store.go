@@ -166,8 +166,20 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	return d, s.syncDelivery(ctx, orgID, d)
 }
 
+// delete retires a deal rather than erasing it.
+//
+// A hard delete could not work: quotes, calendar events and slack_channels all
+// reference deals with no ON DELETE clause, so Postgres refused the delete for
+// any deal that had ever been quoted — and the violation surfaced as "that owner
+// or contact is not part of your organization", which explains nothing.
+//
+// Soft delete is also the honest model. A quote or invoice raised from a deal is
+// a financial record; it must keep pointing at where it came from. Every read in
+// this module already filters deleted_at, so a retired deal leaves the board.
 func (s *store) delete(ctx context.Context, _ string, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM deals WHERE id = $1`, id)
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE deals SET deleted_at = now(), updated_at = now()
+		  WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return translate(err)
 	}
