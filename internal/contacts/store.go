@@ -33,8 +33,7 @@ type Contact struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// store is a hand-written pgx repository, matching the auth module's approach
-// (see internal/contacts/db/queries.sql for the sqlc-shaped reference).
+// store is a hand-written pgx repository, matching the auth module's approach.
 //
 // Every method takes orgID and every statement filters on it. That is the only
 // thing standing between two tenants' data, so it is not optional anywhere.

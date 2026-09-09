@@ -35,10 +35,10 @@ type newUser struct {
 	ProviderUserID *string
 }
 
-// store is a thin, hand-written pgx repository for the users table. The repo's
-// documented pattern uses sqlc (see internal/auth/db/queries.sql); this keeps
-// the module buildable without the sqlc codegen step. Swap in the generated
-// package later without touching service.go.
+// store is a thin, hand-written pgx repository for the users table.
+//
+// Hand-written is the settled choice, not a stopgap: every module ended up here
+// and the sqlc generation this once deferred to has been removed.
 type store struct {
 	pool *pgxpool.Pool
 }
