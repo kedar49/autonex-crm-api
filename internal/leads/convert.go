@@ -7,43 +7,47 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/internal/delivery"
+	"github.com/go-crm/services/pkg/middleware"
 	"github.com/jackc/pgx/v5"
 )
 
 // ErrAlreadyConverted means the lead has already produced a deal.
 var ErrAlreadyConverted = errors.New("lead has already been converted")
 
-// ConvertInput is the brief's convert dialog (§3.4): everything pre-filled from
-// the lead, with the four things a person actually types.
+// ConvertInput is the convert dialog payload. Supports both Deal form and Convert dialog fields.
 type ConvertInput struct {
 	DealTitle         *string    `json:"dealTitle"`
+	Title             *string    `json:"title"`
 	Amount            *float64   `json:"amount"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
-	// CallNotes become a logged activity, not a field on the deal — "key points
-	// from the call" is history, and history belongs on the timeline.
-	CallNotes *string `json:"callNotes"`
-	DealStage *string `json:"dealStage"`
+	CallNotes         *string    `json:"callNotes"`
+	Description       *string    `json:"description"`
+	DealStage         *string    `json:"dealStage"`
+	Stage             *string    `json:"stage"`
+	OwnerUserID       *string    `json:"ownerUserId"`
+	AccountID         *string    `json:"accountId"`
+	Products          *string    `json:"products"`
+	TotalCameras      *int       `json:"totalCameras"`
+	Location          *string    `json:"location"`
 }
 
 // Conversion is what a conversion produced.
 type Conversion struct {
-	LeadID    string `json:"leadId"`
-	ContactID string `json:"contactId"`
-	DealID    string `json:"dealId"`
-	AccountID string `json:"accountId"`
-	// ContactCreated is false when the lead's existing contact was reused.
+	LeadID         string `json:"leadId"`
+	ContactID      string `json:"contactId"`
+	DealID         string `json:"dealId"`
+	AccountID      string `json:"accountId"`
 	ContactCreated bool   `json:"contactCreated"`
 	CallNotes      string `json:"-"`
 }
 
-// defaultDealStage is the first stage of the *deal* pipeline. A converted lead
-// starts at the beginning of the deal board rather than being guessed into the
-// middle of it.
 const defaultDealStage = "discovery"
 
-// validDealStages mirrors deals.Stages. Duplicated deliberately: importing the
-// deals package here would make two domain modules mutually dependent, and the
-// database CHECK constraint is the real enforcement either way.
+// deliveryStage is the point at which a deal acquires a row in the client delivery tracker.
+const deliveryStage = "delivery"
+
+// validDealStages mirrors deals.Stages.
 var validDealStages = map[string]bool{
 	"discovery": true, "site_assessment": true, "quote_sent": true,
 	"negotiation": true, "delivery": true, "won": true, "lost": true,
@@ -64,36 +68,40 @@ func normalizeDealStage(raw string) string {
 	return s
 }
 
-// Convert turns a lead into a contact plus a deal, and marks the lead converted.
-//
-// All the writes happen in one transaction: a conversion that created a deal but
-// left the lead open — or created a contact and then failed — would be worse than
-// not converting at all.
-//
-// Boundary note: this is the one place the leads module writes to another
-// module's tables. Doing it "properly" through the contacts and deals services
-// would need a shared unit-of-work, since each store owns its own pool and a
-// cross-module transaction can't otherwise be expressed.
+// Convert turns a lead into a deal, and marks the lead converted.
 func (s *Service) Convert(ctx context.Context, orgID, leadID string, in ConvertInput) (Conversion, error) {
-	stage := defaultDealStage
-	if in.DealStage != nil && *in.DealStage != "" {
-		norm := normalizeDealStage(*in.DealStage)
-		if !validDealStages[norm] {
-			return Conversion{}, invalid("unknown deal stage %q", *in.DealStage)
-		}
-		stage = norm
+	stageStr := defaultDealStage
+	if in.Stage != nil && *in.Stage != "" {
+		stageStr = *in.Stage
+	} else if in.DealStage != nil && *in.DealStage != "" {
+		stageStr = *in.DealStage
 	}
+	norm := normalizeDealStage(stageStr)
+	if !validDealStages[norm] {
+		return Conversion{}, invalid("unknown deal stage %q", stageStr)
+	}
+
 	if in.Amount != nil && (*in.Amount < 0 || *in.Amount > 1e12) {
 		return Conversion{}, invalid("amount must be between 0 and 1,000,000,000,000")
 	}
-	if in.DealTitle != nil && len(strings.TrimSpace(*in.DealTitle)) > 160 {
+
+	rawTitle := in.Title
+	if rawTitle == nil {
+		rawTitle = in.DealTitle
+	}
+	if rawTitle != nil && len(strings.TrimSpace(*rawTitle)) > 160 {
 		return Conversion{}, invalid("deal name must be 160 characters or fewer")
 	}
-	if in.CallNotes != nil && len(*in.CallNotes) > 5000 {
-		return Conversion{}, invalid("call notes must be 5000 characters or fewer")
+
+	notes := in.Description
+	if notes == nil {
+		notes = in.CallNotes
+	}
+	if notes != nil && len(*notes) > 5000 {
+		return Conversion{}, invalid("notes must be 5000 characters or fewer")
 	}
 
-	return s.store.convert(ctx, orgID, leadID, in, stage)
+	return s.store.convert(ctx, orgID, leadID, in, norm)
 }
 
 func (s *store) convert(
@@ -105,27 +113,33 @@ func (s *store) convert(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Claim the lead. `converted_at IS NULL` makes this the idempotency guard:
-	// two concurrent requests can't both go on to create a deal.
+	// Claim the lead and read its current fields.
 	var (
-		firstName string
-		lastName  *string
-		email     *string
-		phone     *string
-		company   *string
-		value     *float64
-		owner     *string
-		accountID *string
-		contactID *string
+		contactName     string
+		email           *string
+		phone           *string
+		value           *float64
+		owner           *string
+		leadAccountID   *string
+		contactID       *string
+		leadNotes       *string
+		leadLocation    *string
+		productInterest *string
 	)
+
 	err = tx.QueryRow(ctx,
 		`UPDATE leads
-		 SET stage = 'converted', converted_at = now(), follow_up_at = NULL, updated_at = now()
-		 WHERE org_id = $1 AND id = $2 AND converted_at IS NULL
-		 RETURNING first_name, last_name, email, phone, company, value,
-		           owner_user_id::text, account_id::text, contact_id::text`,
-		orgID, leadID,
-	).Scan(&firstName, &lastName, &email, &phone, &company, &value, &owner, &accountID, &contactID)
+		 SET status = 'converted', next_follow_up_date = NULL, updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL AND status <> 'converted'
+		 RETURNING COALESCE(contact_name, ''), email, phone, value_estimate,
+		           assigned_to::text, account_id::text, contact_id::text,
+		           notes, location, product_interest`,
+		leadID,
+	).Scan(
+		&contactName, &email, &phone, &value,
+		&owner, &leadAccountID, &contactID,
+		&leadNotes, &leadLocation, &productInterest,
+	)
 
 	if errors.Is(err, pgx.ErrNoRows) || isPgCode(err, pgInvalidTextRepr) {
 		return Conversion{}, s.explainConvertMiss(ctx, orgID, leadID)
@@ -134,58 +148,62 @@ func (s *store) convert(
 		return Conversion{}, err
 	}
 
-	// The company: use the lead's link, else match the free-text name against an
-	// existing account, else create one. A deal without a company is hard to work.
-	if accountID == nil && company != nil && strings.TrimSpace(*company) != "" {
-		name := strings.TrimSpace(*company)
-		var found string
-		err = tx.QueryRow(ctx,
-			`SELECT id::text FROM accounts WHERE org_id = $1 AND lower(name) = lower($2) LIMIT 1`,
-			orgID, name).Scan(&found)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return Conversion{}, err
-		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			if err := tx.QueryRow(ctx,
-				`INSERT INTO accounts (org_id, name) VALUES ($1, $2) RETURNING id::text`,
-				orgID, name).Scan(&found); err != nil {
-				return Conversion{}, err
-			}
-		}
-		accountID = &found
+	// 1. Determine Account
+	var accountID *string
+	if in.AccountID != nil && strings.TrimSpace(*in.AccountID) != "" {
+		trimmed := strings.TrimSpace(*in.AccountID)
+		accountID = &trimmed
+	} else if leadAccountID != nil {
+		accountID = leadAccountID
 	}
 
-	// The person: the lead's linked contact, else one matching the email, else new.
-	created := false
-	if contactID == nil {
-		if email != nil {
-			var found string
-			err = tx.QueryRow(ctx,
-				`SELECT id::text FROM contacts WHERE org_id = $1 AND lower(email) = lower($2)`,
-				orgID, *email).Scan(&found)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return Conversion{}, err
-			}
-			if err == nil {
-				contactID = &found
-			}
-		}
-		if contactID == nil {
-			var newID string
-			if err := tx.QueryRow(ctx,
-				`INSERT INTO contacts (org_id, first_name, last_name, email, phone, account_id)
-				 VALUES ($1, $2, $3, $4, $5, $6)
-				 RETURNING id::text`,
-				orgID, firstName, lastName, email, phone, accountID,
-			).Scan(&newID); err != nil {
-				return Conversion{}, err
-			}
-			contactID = &newID
-			created = true
+	// 2. Determine Owner
+	if in.OwnerUserID != nil && strings.TrimSpace(*in.OwnerUserID) != "" {
+		trimmed := strings.TrimSpace(*in.OwnerUserID)
+		owner = &trimmed
+	} else if owner == nil {
+		var defaultOwner string
+		if err := tx.QueryRow(ctx, `SELECT id::text FROM profiles ORDER BY created_at ASC LIMIT 1`).Scan(&defaultOwner); err == nil {
+			owner = &defaultOwner
 		}
 	}
 
-	title := dealTitle(in.DealTitle, company, firstName, lastName)
+	// If account is still not known, try to match or create from company name if available
+	rawTitle := in.Title
+	if rawTitle == nil {
+		rawTitle = in.DealTitle
+	}
+
+	var accountName *string
+	if accountID != nil {
+		var accName string
+		if err := tx.QueryRow(ctx, `SELECT name FROM accounts WHERE id = $1`, *accountID).Scan(&accName); err == nil {
+			accountName = &accName
+		}
+	}
+
+	title := dealTitle(rawTitle, accountName, contactName, nil)
+	if accountID == nil {
+		var foundAcc string
+		err := tx.QueryRow(ctx,
+			`SELECT id::text FROM accounts WHERE lower(trim(name)) = lower(trim($1)) AND deleted_at IS NULL LIMIT 1`,
+			title,
+		).Scan(&foundAcc)
+		if err == nil {
+			accountID = &foundAcc
+		} else if owner != nil {
+			// Create account if needed
+			var newAccID string
+			if insErr := tx.QueryRow(ctx,
+				`INSERT INTO accounts (name, owner_id) VALUES ($1, $2) RETURNING id::text`,
+				title, *owner,
+			).Scan(&newAccID); insErr == nil {
+				accountID = &newAccID
+			}
+		}
+	}
+
+	// 3. Amount
 	amount := 0.0
 	if in.Amount != nil {
 		amount = *in.Amount
@@ -193,75 +211,95 @@ func (s *store) convert(
 		amount = *value
 	}
 
-	if accountID == nil {
-		name := strings.TrimSpace(title)
-		if name == "" {
-			name = "Individual Account"
-		}
-		var found string
-		if err := tx.QueryRow(ctx,
-			`INSERT INTO accounts (org_id, name) VALUES ($1, $2) RETURNING id::text`,
-			orgID, name).Scan(&found); err == nil {
-			accountID = &found
-		}
+	// 4. Notes / Description
+	notes := ""
+	if in.Description != nil && strings.TrimSpace(*in.Description) != "" {
+		notes = strings.TrimSpace(*in.Description)
+	} else if in.CallNotes != nil && strings.TrimSpace(*in.CallNotes) != "" {
+		notes = strings.TrimSpace(*in.CallNotes)
+	} else if leadNotes != nil {
+		notes = strings.TrimSpace(*leadNotes)
 	}
 
-	if owner == nil {
-		var defaultOwner string
-		if err := tx.QueryRow(ctx, `SELECT id::text FROM profiles WHERE org_id = $1 ORDER BY created_at ASC LIMIT 1`, orgID).Scan(&defaultOwner); err == nil {
-			owner = &defaultOwner
-		}
+	// 5. Products, Location, TotalCameras
+	var products *string = in.Products
+	if (products == nil || *products == "") && productInterest != nil {
+		products = productInterest
 	}
 
+	var location *string = in.Location
+	if (location == nil || *location == "") && leadLocation != nil {
+		location = leadLocation
+	}
+
+	totalCameras := in.TotalCameras
+
+	// 6. Insert into deals
 	var dealID string
-	if err := tx.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO deals
-		   (title, notes, amount, stage, owner_id, primary_contact_id, account_id,
-		    expected_close_date, lead_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		   (title, notes, amount, stage, owner_id, primary_contact_id,
+		    account_id, lead_id, expected_close_date,
+		    total_cameras, location, products)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 RETURNING id::text`,
-		title, in.CallNotes, amount, stage, owner, contactID, accountID, in.ExpectedCloseDate, leadID,
-	).Scan(&dealID); err != nil {
+		title, notes, amount, stage, owner, contactID,
+		accountID, leadID, in.ExpectedCloseDate,
+		totalCameras, location, products,
+	).Scan(&dealID)
+	if err != nil {
 		return Conversion{}, err
 	}
 
-	if _, err := tx.Exec(ctx,
-		`UPDATE leads SET converted_deal_id = $3, converted_contact_id = $4, account_id = $5
-		 WHERE org_id = $1 AND id = $2`,
-		orgID, leadID, dealID, contactID, accountID); err != nil {
-		return Conversion{}, err
+	// 7. Update lead account_id if we have one
+	if accountID != nil {
+		_, _ = tx.Exec(ctx,
+			`UPDATE leads SET account_id = COALESCE(account_id, $2) WHERE id = $1`,
+			leadID, *accountID,
+		)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return Conversion{}, err
 	}
 
-	notes := ""
-	if in.CallNotes != nil {
-		notes = strings.TrimSpace(*in.CallNotes)
+	// 8. Sync Delivery tracker if stage is delivery
+	userID := middleware.UserID(ctx)
+	if stage == deliveryStage {
+		_, _ = delivery.EnsureRowForDeal(ctx, s.pool, orgID, dealID, userID)
 	}
+	_ = delivery.SyncFromDeal(ctx, s.pool, dealID, delivery.DealFields{
+		Products:     products,
+		Location:     location,
+		TotalCameras: totalCameras,
+	})
+
 	return Conversion{
-		LeadID: leadID, ContactID: *contactID, DealID: dealID,
-		AccountID: derefID(accountID), ContactCreated: created, CallNotes: notes,
+		LeadID:         leadID,
+		ContactID:      derefID(contactID),
+		DealID:         dealID,
+		AccountID:      derefID(accountID),
+		ContactCreated: false,
+		CallNotes:      notes,
 	}, nil
 }
 
 // explainConvertMiss tells "no such lead" apart from "already converted".
-func (s *store) explainConvertMiss(ctx context.Context, orgID, leadID string) error {
-	var convertedAt *time.Time
+func (s *store) explainConvertMiss(ctx context.Context, _, leadID string) error {
+	var status string
 	err := s.pool.QueryRow(ctx,
-		`SELECT converted_at FROM leads WHERE org_id = $1 AND id = $2`, orgID, leadID,
-	).Scan(&convertedAt)
+		`SELECT status FROM leads WHERE id = $1 AND deleted_at IS NULL`, leadID,
+	).Scan(&status)
 
 	switch {
 	case errors.Is(err, pgx.ErrNoRows), isPgCode(err, pgInvalidTextRepr):
 		return ErrNotFound
 	case err != nil:
 		return err
-	default:
-		// Exists but the claim missed: it is converted, or a concurrent
-		// conversion committed between the two statements.
+	case status == "converted":
 		return ErrAlreadyConverted
+	default:
+		return ErrNotFound
 	}
 }
 
@@ -281,7 +319,10 @@ func dealTitle(override, company *string, firstName string, lastName *string) st
 	if lastName != nil && *lastName != "" {
 		name = fmt.Sprintf("%s %s", firstName, *lastName)
 	}
-	return name
+	if strings.TrimSpace(name) != "" {
+		return strings.TrimSpace(name)
+	}
+	return "New Deal"
 }
 
 func derefID(v *string) string {

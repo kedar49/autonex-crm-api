@@ -43,7 +43,8 @@ type Deal struct {
 	// The lead this deal was converted from. Read and written: it used to be set
 	// on create and never selected or updated, so the edit form showed it empty
 	// and saving silently dropped the link.
-	LeadID *string `json:"leadId"`
+	LeadID   *string `json:"leadId"`
+	LeadName *string `json:"leadName"`
 	// What is being deployed on this deal. Free text for products and location:
 	// the catalogue is not modelled, and a site list is rarely one tidy value.
 	TotalCameras      *int       `json:"totalCameras"`
@@ -82,6 +83,7 @@ const dealColumns = `
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
 	d.account_id::text         AS account_id,
 	d.lead_id::text            AS lead_id,
+	l.contact_name             AS lead_name,
 	d.total_cameras, d.location, d.products,
 	d.expected_close_date,
 	(row_number() OVER (PARTITION BY d.stage ORDER BY d.created_at, d.id) * 1000)::float8,
@@ -90,7 +92,8 @@ const dealColumns = `
 const dealFrom = `
 	FROM deals d
 	LEFT JOIN profiles p ON p.id = d.owner_id
-	LEFT JOIN contacts c ON c.id = d.primary_contact_id `
+	LEFT JOIN contacts c ON c.id = d.primary_contact_id
+	LEFT JOIN leads    l ON l.id = d.lead_id `
 
 func (s *store) board(ctx context.Context, _ string, limit int) ([]Deal, error) {
 	rows, err := s.pool.Query(ctx,
@@ -329,7 +332,7 @@ func scanDeal(row rowScanner) (Deal, error) {
 		&d.ID, &d.Title, &d.Description, &d.Amount, &d.Stage,
 		&d.OwnerUserID, &d.OwnerName, &d.OwnerEmail,
 		&d.ContactID, &d.ContactName,
-		&d.AccountID, &d.LeadID, &d.TotalCameras, &d.Location, &d.Products,
+		&d.AccountID, &d.LeadID, &d.LeadName, &d.TotalCameras, &d.Location, &d.Products,
 		&d.ExpectedCloseDate, &d.Position, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return Deal{}, translate(err)

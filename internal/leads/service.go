@@ -26,7 +26,7 @@ var Stages = []string{
 }
 
 // Terminal stages: work has finished, one way or the other.
-var terminal = map[string]bool{"closed": true, "not interested": true}
+var terminal = map[string]bool{"closed": true, "not interested": true, "converted": true}
 
 // Filters the list accepts beyond a plain stage name.
 const (
@@ -214,7 +214,7 @@ func ValidStage(stage string) bool {
 // ValidFilter reports whether the list accepts this filter value.
 func ValidFilter(filter string) bool {
 	switch filter {
-	case FilterOverdue, FilterDueToday, FilterOpen:
+	case FilterOverdue, FilterDueToday, FilterOpen, "converted":
 		return true
 	}
 	return ValidStage(filter)

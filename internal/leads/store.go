@@ -3,6 +3,7 @@ package leads
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -89,9 +90,9 @@ const leadColumns = `
 	l.value_estimate                   AS value,
 	l.status                           AS stage,
 	l.account_id::text                 AS account_id,
-	c.name                             AS account_name,
-	c.industry                         AS account_industry,
-	c.name                             AS company,
+	COALESCE(c.name, l.title)          AS account_name,
+	COALESCE(c.industry, l.industry)   AS account_industry,
+	COALESCE(c.name, l.title)          AS company,
 	l.contact_id::text,
 	l.assigned_to::text                AS owner_user_id,
 	p.full_name                        AS owner_name,
@@ -100,15 +101,15 @@ const leadColumns = `
 	-- COALESCE is load-bearing, not defensive: a lead with no follow-up date
 	-- compares NULL, not false, and pgx cannot scan that into a bool.
 	COALESCE(l.next_follow_up_date < CURRENT_DATE
-	   AND l.status NOT IN ('closed','not interested'), false),
+	   AND l.status NOT IN ('closed','not interested','converted'), false),
 	COALESCE(l.next_follow_up_date = CURRENT_DATE
-	   AND l.status NOT IN ('closed','not interested'), false),
+	   AND l.status NOT IN ('closed','not interested','converted'), false),
 	-- Activities are polymorphic here (entity_type/entity_id), not a lead_id FK.
 	(SELECT max(act.occurred_at) FROM activities act
 	  WHERE act.entity_type = 'lead' AND act.entity_id = l.id
 	    AND act.type <> 'system'),
 	NULL::timestamptz                  AS converted_at,
-	NULL::text                         AS converted_deal_id,
+	(SELECT d.id::text FROM deals d WHERE d.lead_id = l.id AND d.deleted_at IS NULL LIMIT 1) AS converted_deal_id,
 	NULL::text                         AS converted_contact_id,
 	l.created_at, l.updated_at`
 
@@ -123,7 +124,7 @@ const leadFrom = `
 const urgencyOrder = `
 	ORDER BY
 	  CASE
-	    WHEN l.status IN ('closed','not interested') THEN 2
+	    WHEN l.status IN ('closed','not interested','converted') THEN 2
 	    WHEN l.next_follow_up_date IS NULL       THEN 1
 	    ELSE 0
 	  END,
@@ -142,10 +143,10 @@ const filterClause = `
 	  AND ($1 = '' OR
 	       ($1 = 'overdue'   AND l.next_follow_up_date IS NOT NULL
 	                         AND l.next_follow_up_date < CURRENT_DATE
-	                         AND l.status NOT IN ('closed','not interested')) OR
+	                         AND l.status NOT IN ('closed','not interested','converted')) OR
 	       ($1 = 'due_today' AND l.next_follow_up_date = CURRENT_DATE
-	                         AND l.status NOT IN ('closed','not interested')) OR
-	       ($1 = 'open'      AND l.status NOT IN ('closed','not interested')) OR
+	                         AND l.status NOT IN ('closed','not interested','converted')) OR
+	       ($1 = 'open'      AND l.status NOT IN ('closed','not interested','converted')) OR
 	       ($1 NOT IN ('overdue','due_today','open') AND l.status = $1))`
 
 func (s *store) list(ctx context.Context, _, filter string, limit, offset int) ([]Lead, error) {
@@ -183,11 +184,11 @@ func (s *store) counts(ctx context.Context, _ string) (map[string]int, error) {
 		 SELECT 'overdue', count(*) FROM leads
 		   WHERE deleted_at IS NULL AND next_follow_up_date IS NOT NULL
 		     AND next_follow_up_date < CURRENT_DATE
-		     AND status NOT IN ('closed','not interested')
+		     AND status NOT IN ('closed','not interested','converted')
 		 UNION ALL
 		 SELECT 'due_today', count(*) FROM leads
 		   WHERE deleted_at IS NULL AND next_follow_up_date = CURRENT_DATE
-		     AND status NOT IN ('closed','not interested')`)
+		     AND status NOT IN ('closed','not interested','converted')`)
 	if err != nil {
 		return nil, err
 	}
@@ -215,15 +216,24 @@ func (s *store) get(ctx context.Context, _, id string) (Lead, error) {
 // sends is stored there. Only the last name and the free-text company fallback
 // have no column, and those are dropped.
 func (s *store) create(ctx context.Context, _ string, in Input) (string, error) {
+	name := strings.TrimSpace(in.FirstName)
+	if in.LastName != nil && strings.TrimSpace(*in.LastName) != "" {
+		name = strings.TrimSpace(name + " " + strings.TrimSpace(*in.LastName))
+	}
+	var companyTitle *string
+	if in.Company != nil && strings.TrimSpace(*in.Company) != "" {
+		t := strings.TrimSpace(*in.Company)
+		companyTitle = &t
+	}
 	var id string
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO leads
-		   (contact_name, job_title, email, phone, linkedin_url, contact_id,
+		   (contact_name, title, job_title, email, phone, linkedin_url, contact_id,
 		    account_id, source, notes, value_estimate, status, assigned_to,
 		    next_follow_up_date)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::date)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::date)
 		 RETURNING id::text`,
-		in.FirstName, in.Title, in.Email, in.Phone, in.LinkedIn, in.ContactID,
+		name, companyTitle, in.Title, in.Email, in.Phone, in.LinkedIn, in.ContactID,
 		in.AccountID, in.Source, in.Notes, in.Value, in.Stage, in.OwnerUserID,
 		in.FollowUpAt,
 	).Scan(&id)
@@ -231,14 +241,25 @@ func (s *store) create(ctx context.Context, _ string, in Input) (string, error) 
 }
 
 func (s *store) update(ctx context.Context, _, id string, in Input) error {
+	name := strings.TrimSpace(in.FirstName)
+	if in.LastName != nil && strings.TrimSpace(*in.LastName) != "" {
+		name = strings.TrimSpace(name + " " + strings.TrimSpace(*in.LastName))
+	}
+	var companyTitle *string
+	if in.Company != nil && strings.TrimSpace(*in.Company) != "" {
+		t := strings.TrimSpace(*in.Company)
+		companyTitle = &t
+	}
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE leads
-		 SET contact_name = $2, job_title = $3, email = $4, phone = $5,
-		     linkedin_url = $6, contact_id = $7, account_id = $8, source = $9,
-		     notes = $10, value_estimate = $11, status = $12, assigned_to = $13,
-		     next_follow_up_date = $14::date, updated_at = now()
+		 SET contact_name = $2,
+		     title = CASE WHEN $3::text IS NOT NULL THEN $3::text ELSE title END,
+		     job_title = $4, email = $5, phone = $6,
+		     linkedin_url = $7, contact_id = $8, account_id = $9, source = $10,
+		     notes = $11, value_estimate = $12, status = $13, assigned_to = $14,
+		     next_follow_up_date = $15::date, updated_at = now()
 		 WHERE id = $1 AND deleted_at IS NULL`,
-		id, in.FirstName, in.Title, in.Email, in.Phone, in.LinkedIn,
+		id, name, companyTitle, in.Title, in.Email, in.Phone, in.LinkedIn,
 		in.ContactID, in.AccountID, in.Source, in.Notes, in.Value, in.Stage,
 		in.OwnerUserID, in.FollowUpAt)
 	if err != nil {
