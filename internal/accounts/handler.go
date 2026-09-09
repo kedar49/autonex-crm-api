@@ -1,13 +1,11 @@
 package accounts
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 	"github.com/go-crm/services/pkg/paging"
@@ -116,18 +114,12 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "account not found")
-	case errors.Is(err, ErrInUse):
-		httpx.WriteError(w, http.StatusConflict,
-			"unlink its contacts and deals before deleting this account")
-	case errors.Is(err, ErrOwnerNotFound):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"that owner is not a member of your organization")
-	case apperr.IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "account not found"},
+		httpx.Rule{Err: ErrInUse, Status: http.StatusConflict,
+			Message: "unlink its contacts and deals before deleting this account"},
+		httpx.Rule{Err: ErrOwnerNotFound, Status: http.StatusBadRequest,
+			Message: "that owner is not a member of your organization"},
+	)
 }

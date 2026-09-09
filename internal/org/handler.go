@@ -1,14 +1,12 @@
 package org
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/auth"
-	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
@@ -137,20 +135,16 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "invitation not found")
-	case errors.Is(err, ErrAlreadyMember):
-		httpx.WriteError(w, http.StatusConflict, "that email already belongs to an account")
-	case errors.Is(err, ErrAlreadyInvited):
-		httpx.WriteError(w, http.StatusConflict, "that email already has a pending invitation")
-	case errors.Is(err, ErrInviteInvalid):
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "invitation not found"},
+		httpx.Rule{Err: ErrAlreadyMember, Status: http.StatusConflict,
+			Message: "that email already belongs to an account"},
+		httpx.Rule{Err: ErrAlreadyInvited, Status: http.StatusConflict,
+			Message: "that email already has a pending invitation"},
 		// Deliberately vague: unknown, expired and already-used all look alike,
 		// so the endpoint can't be used to probe for live invitations.
-		httpx.WriteError(w, http.StatusBadRequest, "this invitation is invalid or has expired")
-	case apperr.IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+		httpx.Rule{Err: ErrInviteInvalid, Status: http.StatusBadRequest,
+			Message: "this invitation is invalid or has expired"},
+	)
 }

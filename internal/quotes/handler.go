@@ -1,7 +1,6 @@
 package quotes
 
 import (
-	"errors"
 	"io"
 	"net/http"
 
@@ -10,7 +9,6 @@ import (
 
 	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/internal/pdf"
-	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 	"github.com/go-crm/services/pkg/paging"
@@ -194,18 +192,12 @@ func (h *Handler) downloadPDF(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeErr(w http.ResponseWriter, err error, fallback string) {
-	switch {
-	case errors.Is(err, ErrNotFound):
-		httpx.WriteError(w, http.StatusNotFound, "quote not found")
-	case errors.Is(err, ErrNotDraft):
-		httpx.WriteError(w, http.StatusConflict,
-			"this quote has been issued — revise it back to draft to make changes")
-	case errors.Is(err, ErrRefNotFound):
-		httpx.WriteError(w, http.StatusBadRequest,
-			"a referenced account, contact, deal or owner is not part of your organization")
-	case apperr.IsValidation(err):
-		httpx.WriteError(w, http.StatusBadRequest, err.Error())
-	default:
-		httpx.WriteServerError(w, fallback, err)
-	}
+	httpx.WriteDomainError(w, err, fallback,
+		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
+			Message: "quote not found"},
+		httpx.Rule{Err: ErrNotDraft, Status: http.StatusConflict,
+			Message: "this quote has been issued — revise it back to draft to make changes"},
+		httpx.Rule{Err: ErrRefNotFound, Status: http.StatusBadRequest,
+			Message: "a referenced account, contact, deal or owner is not part of your organization"},
+	)
 }
