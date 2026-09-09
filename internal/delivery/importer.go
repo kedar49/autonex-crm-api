@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -213,17 +214,17 @@ func (s *Service) Preview(ctx context.Context, orgID, filename string, r io.Read
 // the preview before accepting it.
 func (s *Service) Commit(ctx context.Context, orgID, userID string, rows []Input) (CommitResult, error) {
 	if len(rows) == 0 {
-		return CommitResult{}, invalid("nothing to import")
+		return CommitResult{}, apperr.Invalid("nothing to import")
 	}
 	if len(rows) > maxImportRows {
-		return CommitResult{}, invalid("that import is too large (%d rows, limit %d)", len(rows), maxImportRows)
+		return CommitResult{}, apperr.Invalid("that import is too large (%d rows, limit %d)", len(rows), maxImportRows)
 	}
 
 	clean := make([]Input, 0, len(rows))
 	for i, in := range rows {
 		v, err := validate(in)
 		if err != nil {
-			return CommitResult{}, invalid("row %d: %s", i+1, err.Error())
+			return CommitResult{}, apperr.Invalid("row %d: %s", i+1, err.Error())
 		}
 		clean = append(clean, v)
 	}
@@ -255,19 +256,19 @@ func fileExt(name string) string {
 func parseXLSX(r io.Reader) ([]parsedRow, []string, []string, error) {
 	f, err := excelize.OpenReader(r)
 	if err != nil {
-		return nil, nil, nil, invalid("that file could not be read as a spreadsheet")
+		return nil, nil, nil, apperr.Invalid("that file could not be read as a spreadsheet")
 	}
 	defer func() { _ = f.Close() }()
 
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
-		return nil, nil, nil, invalid("that workbook has no sheets")
+		return nil, nil, nil, apperr.Invalid("that workbook has no sheets")
 	}
 	// The first sheet only: the tracker's master tab is the first one, and
 	// silently merging per-client tabs behind it would be a guess.
 	grid, err := f.GetRows(sheets[0])
 	if err != nil {
-		return nil, nil, nil, invalid("sheet %q could not be read", sheets[0])
+		return nil, nil, nil, apperr.Invalid("sheet %q could not be read", sheets[0])
 	}
 	return rowsFromGrid(grid)
 }
@@ -280,7 +281,7 @@ func parseCSV(r io.Reader) ([]parsedRow, []string, []string, error) {
 
 	grid, err := reader.ReadAll()
 	if err != nil {
-		return nil, nil, nil, invalid("that file could not be read as CSV")
+		return nil, nil, nil, apperr.Invalid("that file could not be read as CSV")
 	}
 	return rowsFromGrid(grid)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -103,7 +104,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 		httpx.WriteError(w, http.StatusConflict, "a contact with that email already exists")
 	case errors.Is(err, ErrAccountNotFound):
 		httpx.WriteError(w, http.StatusBadRequest, "unknown account")
-	case IsValidation(err):
+	case apperr.IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpx.WriteServerError(w, fallback, err)

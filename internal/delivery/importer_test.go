@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-crm/services/pkg/apperr"
 )
 
 // The real tracker opens with a title and a subtitle above the headings, so the
@@ -218,7 +220,7 @@ func TestDiffComparesDatesByCalendarDay(t *testing.T) {
 }
 
 func TestValidateRequiresClient(t *testing.T) {
-	if _, err := validate(Input{Client: "   "}); err == nil || !IsValidation(err) {
+	if _, err := validate(Input{Client: "   "}); err == nil || !apperr.IsValidation(err) {
 		t.Fatalf("err = %v, want a validation error", err)
 	}
 

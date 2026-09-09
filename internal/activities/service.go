@@ -2,11 +2,10 @@ package activities
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,21 +17,6 @@ const (
 	defaultLimit = 50
 	maxLimit     = 200
 )
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // Input is the writable shape of an activity.
 type Input struct {
@@ -183,19 +167,19 @@ func validateEditable(in Input) error {
 	if !ValidKind(in.Kind) {
 		// "system" lands here too, which is the point: it is not something a
 		// client may write.
-		return invalid("unknown activity kind %q", in.Kind)
+		return apperr.Invalid("unknown activity kind %q", in.Kind)
 	}
 	if in.Subject == nil && in.Body == nil {
-		return invalid("an activity needs a subject or a note")
+		return apperr.Invalid("an activity needs a subject or a note")
 	}
 	if in.Subject != nil && len(*in.Subject) > 200 {
-		return invalid("subject must be 200 characters or fewer")
+		return apperr.Invalid("subject must be 200 characters or fewer")
 	}
 	if in.Body != nil && len(*in.Body) > 5000 {
-		return invalid("note must be 5000 characters or fewer")
+		return apperr.Invalid("note must be 5000 characters or fewer")
 	}
 	if in.DurationMinutes != nil && (*in.DurationMinutes < 0 || *in.DurationMinutes > 24*60) {
-		return invalid("duration must be between 0 and 1440 minutes")
+		return apperr.Invalid("duration must be between 0 and 1440 minutes")
 	}
 	return nil
 }
@@ -210,7 +194,7 @@ func validate(in Input) error {
 	// would be silently lost rather than rejected.
 	if in.LeadID == nil && in.DealID == nil && in.AccountID == nil &&
 		in.ContactID == nil && in.QuoteID == nil && in.InvoiceID == nil {
-		return invalid("an activity must be attached to a lead, deal, company, contact, quote or invoice")
+		return apperr.Invalid("an activity must be attached to a lead, deal, company, contact, quote or invoice")
 	}
 	return nil
 }

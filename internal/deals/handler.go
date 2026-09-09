@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/internal/notify"
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -142,7 +143,7 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 	case errors.Is(err, ErrRefNotFound):
 		httpx.WriteError(w, http.StatusBadRequest,
 			"that owner or contact is not part of your organization")
-	case IsValidation(err):
+	case apperr.IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpx.WriteServerError(w, fallback, err)

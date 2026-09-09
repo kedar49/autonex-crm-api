@@ -2,10 +2,9 @@ package contacts
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,16 +13,6 @@ const (
 	defaultLimit = 25
 	maxLimit     = 100
 )
-
-// ValidationError is a rejected input, reported to the client as a 400 with its
-// message. Anything else from the service is a 500.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
 
 // Input is the writable shape of a contact (create and update share it).
 //
@@ -151,25 +140,25 @@ func trimmedOrNil(v *string) *string {
 // server repeats them because a client is not a trust boundary.
 func validate(in Input) error {
 	if in.FirstName == "" {
-		return invalid("first name is required")
+		return apperr.Invalid("first name is required")
 	}
 	if len(in.FirstName) > 100 {
-		return invalid("names must be 100 characters or fewer")
+		return apperr.Invalid("names must be 100 characters or fewer")
 	}
 	if in.LastName != nil && len(*in.LastName) > 100 {
-		return invalid("names must be 100 characters or fewer")
+		return apperr.Invalid("names must be 100 characters or fewer")
 	}
 	// Optional, but must look like an address when supplied.
 	if in.Email != nil {
 		switch {
 		case !strings.Contains(*in.Email, "@") || strings.ContainsAny(*in.Email, " \t"):
-			return invalid("a valid email is required")
+			return apperr.Invalid("a valid email is required")
 		case len(*in.Email) > 255:
-			return invalid("email must be 255 characters or fewer")
+			return apperr.Invalid("email must be 255 characters or fewer")
 		}
 	}
 	if in.Phone != nil && len(*in.Phone) > 40 {
-		return invalid("phone must be 40 characters or fewer")
+		return apperr.Invalid("phone must be 40 characters or fewer")
 	}
 	return nil
 }
@@ -186,10 +175,4 @@ func clampPage(limit, offset int) (int, int) {
 		offset = 0
 	}
 	return limit, offset
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
 }

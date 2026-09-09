@@ -2,11 +2,10 @@ package leads
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -39,21 +38,6 @@ const (
 	defaultLimit = 25
 	maxLimit     = 100
 )
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // Input is the writable shape of a lead.
 type Input struct {
@@ -120,7 +104,7 @@ func NewService(pool *pgxpool.Pool) *Service {
 // List returns one org-scoped page, sorted by urgency.
 func (s *Service) List(ctx context.Context, orgID, filter string, limit, offset int) (Page, error) {
 	if filter != "" && !ValidFilter(filter) {
-		return Page{}, invalid("unknown filter %q", filter)
+		return Page{}, apperr.Invalid("unknown filter %q", filter)
 	}
 	limit, offset = clampPage(limit, offset)
 
@@ -176,13 +160,13 @@ func (s *Service) Update(ctx context.Context, orgID, id string, in Input) (Lead,
 func (s *Service) AdvanceStage(ctx context.Context, orgID, id string, adv Advance) (Lead, error) {
 	switch {
 	case !ValidStage(adv.ToStage):
-		return Lead{}, invalid("unknown stage %q", adv.ToStage)
+		return Lead{}, apperr.Invalid("unknown stage %q", adv.ToStage)
 	case adv.ToStage == "converted":
 		// Converting creates a contact and a deal, so it can't be a stage edit.
-		return Lead{}, invalid("use the convert action to turn a lead into a deal")
+		return Lead{}, apperr.Invalid("use the convert action to turn a lead into a deal")
 	}
 	if adv.Note != nil && len(*adv.Note) > 5000 {
-		return Lead{}, invalid("note must be 5000 characters or fewer")
+		return Lead{}, apperr.Invalid("note must be 5000 characters or fewer")
 	}
 
 	if err := s.store.advance(ctx, orgID, id, adv.ToStage, adv.FollowUpAt, adv.ClearFollowUp); err != nil {
@@ -350,26 +334,26 @@ func trimmedOrNil(v *string) *string {
 func validate(in Input) error {
 	switch {
 	case in.FirstName == "":
-		return invalid("name is required")
+		return apperr.Invalid("name is required")
 	case len(in.FirstName) > 100:
-		return invalid("name must be 100 characters or fewer")
+		return apperr.Invalid("name must be 100 characters or fewer")
 	case !ValidStage(in.Stage):
-		return invalid("unknown stage %q", in.Stage)
+		return apperr.Invalid("unknown stage %q", in.Stage)
 	}
 	if in.Email != nil && (!strings.Contains(*in.Email, "@") || len(*in.Email) > 255) {
-		return invalid("a valid email is required")
+		return apperr.Invalid("a valid email is required")
 	}
 	if in.Title != nil && len(*in.Title) > 120 {
-		return invalid("title must be 120 characters or fewer")
+		return apperr.Invalid("title must be 120 characters or fewer")
 	}
 	if in.LinkedIn != nil && len(*in.LinkedIn) > 255 {
-		return invalid("LinkedIn URL must be 255 characters or fewer")
+		return apperr.Invalid("LinkedIn URL must be 255 characters or fewer")
 	}
 	if in.Value != nil && (*in.Value < 0 || *in.Value > 1e12) {
-		return invalid("value must be between 0 and 1,000,000,000,000")
+		return apperr.Invalid("value must be between 0 and 1,000,000,000,000")
 	}
 	if in.Notes != nil && len(*in.Notes) > 5000 {
-		return invalid("notes must be 5000 characters or fewer")
+		return apperr.Invalid("notes must be 5000 characters or fewer")
 	}
 	return nil
 }

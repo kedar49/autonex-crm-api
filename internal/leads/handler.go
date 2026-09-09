@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-crm/services/internal/activities"
 	"github.com/go-crm/services/internal/integrations"
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -269,7 +270,7 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 			"that owner, company or contact is not part of your organization")
 	case errors.Is(err, ErrAlreadyConverted):
 		httpx.WriteError(w, http.StatusConflict, "this lead has already been converted")
-	case IsValidation(err):
+	case apperr.IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpx.WriteServerError(w, fallback, err)

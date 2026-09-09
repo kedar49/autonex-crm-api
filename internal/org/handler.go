@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/auth"
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/config"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
@@ -147,7 +148,7 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 		// Deliberately vague: unknown, expired and already-used all look alike,
 		// so the endpoint can't be used to probe for live invitations.
 		httpx.WriteError(w, http.StatusBadRequest, "this invitation is invalid or has expired")
-	case IsValidation(err):
+	case apperr.IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpx.WriteServerError(w, fallback, err)

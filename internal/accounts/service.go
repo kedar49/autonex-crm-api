@@ -2,10 +2,9 @@ package accounts
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,21 +13,6 @@ const (
 	defaultLimit = 25
 	maxLimit     = 100
 )
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // Input is the writable shape of an account. Only the name is required — the rest
 // gets filled in as you learn about the company.
@@ -190,29 +174,29 @@ func trimmedOrNil(v *string) *string {
 func validate(in Input) error {
 	switch {
 	case in.Name == "":
-		return invalid("company name is required")
+		return apperr.Invalid("company name is required")
 	case len(in.Name) > 160:
-		return invalid("company name must be 160 characters or fewer")
+		return apperr.Invalid("company name must be 160 characters or fewer")
 	}
 	if in.Website != nil {
 		if len(*in.Website) > 255 {
-			return invalid("website must be 255 characters or fewer")
+			return apperr.Invalid("website must be 255 characters or fewer")
 		}
 		// A scheme is guaranteed by normalize; reject anything that still can't be
 		// a host (a space, or nothing after the scheme).
 		host := strings.TrimPrefix(strings.TrimPrefix(*in.Website, "https://"), "http://")
 		if host == "" || strings.ContainsAny(host, " \t") {
-			return invalid("website must be a valid URL")
+			return apperr.Invalid("website must be a valid URL")
 		}
 	}
 	if in.Industry != nil && len(*in.Industry) > 80 {
-		return invalid("industry must be 80 characters or fewer")
+		return apperr.Invalid("industry must be 80 characters or fewer")
 	}
 	if in.Phone != nil && len(*in.Phone) > 40 {
-		return invalid("phone must be 40 characters or fewer")
+		return apperr.Invalid("phone must be 40 characters or fewer")
 	}
 	if in.Notes != nil && len(*in.Notes) > 5000 {
-		return invalid("notes must be 5000 characters or fewer")
+		return apperr.Invalid("notes must be 5000 characters or fewer")
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -161,7 +162,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 	case errors.Is(err, ErrNoClientColumn):
 		httpx.WriteError(w, http.StatusBadRequest,
 			"that sheet has no \"Client\" column, so its rows cannot be matched")
-	case IsValidation(err):
+	case apperr.IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpx.WriteServerError(w, fallback, err)

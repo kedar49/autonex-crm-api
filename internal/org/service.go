@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,22 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-crm/services/internal/auth"
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/config"
 )
 
 // inviteTTL is how long an invitation link stays usable.
 const inviteTTL = 7 * 24 * time.Hour
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // NewInvitation is what the inviter gets back: the stored row plus the one and
 // only time the raw link is ever available.
@@ -80,10 +69,10 @@ func (s *Service) UpdateWorkspace(ctx context.Context, orgID string, name, curre
 	if name != nil {
 		trimmed := strings.TrimSpace(*name)
 		if trimmed == "" {
-			return Workspace{}, ValidationError{msg: "workspace name cannot be empty"}
+			return Workspace{}, apperr.Invalid("workspace name cannot be empty")
 		}
 		if len(trimmed) > 120 {
-			return Workspace{}, ValidationError{msg: "workspace name must be 120 characters or fewer"}
+			return Workspace{}, apperr.Invalid("workspace name must be 120 characters or fewer")
 		}
 		name = &trimmed
 	}
@@ -92,7 +81,7 @@ func (s *Service) UpdateWorkspace(ctx context.Context, orgID string, name, curre
 		// useful 400.
 		code := strings.ToUpper(strings.TrimSpace(*currency))
 		if !isCurrencyCode(code) {
-			return Workspace{}, ValidationError{msg: "currency must be a 3-letter code, e.g. USD"}
+			return Workspace{}, apperr.Invalid("currency must be a 3-letter code, e.g. USD")
 		}
 		currency = &code
 	}
@@ -123,7 +112,7 @@ func (s *Service) PendingInvitations(ctx context.Context, orgID string) ([]Invit
 func (s *Service) Invite(ctx context.Context, orgID, invitedBy, email string) (NewInvitation, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" || !strings.Contains(email, "@") || strings.ContainsAny(email, " \t") {
-		return NewInvitation{}, ValidationError{msg: "a valid email is required"}
+		return NewInvitation{}, apperr.Invalid("a valid email is required")
 	}
 
 	// Users are globally unique by email, so this would fail at acceptance time
@@ -160,7 +149,7 @@ func (s *Service) Accept(ctx context.Context, token, name, password string) (Ses
 		return Session{}, ErrInviteInvalid
 	}
 	if len(password) < 8 {
-		return Session{}, ValidationError{msg: "password must be at least 8 characters"}
+		return Session{}, apperr.Invalid("password must be at least 8 characters")
 	}
 
 	hash, err := auth.HashPassword(password)

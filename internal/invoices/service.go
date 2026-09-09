@@ -2,11 +2,10 @@ package invoices
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,21 +33,6 @@ const (
 	maxLimit     = 100
 	maxItems     = 200
 )
-
-// ValidationError is a rejected input, reported to the client as a 400.
-type ValidationError struct{ msg string }
-
-func (e ValidationError) Error() string { return e.msg }
-
-func invalid(format string, args ...any) error {
-	return ValidationError{msg: fmt.Sprintf(format, args...)}
-}
-
-// IsValidation reports whether err is a client input error (→ 400).
-func IsValidation(err error) bool {
-	var ve ValidationError
-	return errors.As(err, &ve)
-}
 
 // ItemInput is one writable line; the line total is derived.
 type ItemInput struct {
@@ -104,7 +88,7 @@ func NewService(pool *pgxpool.Pool) *Service {
 // List returns one org-scoped page, optionally filtered by status or "overdue".
 func (s *Service) List(ctx context.Context, orgID, status string, limit, offset int) (Page, error) {
 	if status != "" && status != "overdue" && !ValidStatus(status) {
-		return Page{}, invalid("unknown status %q", status)
+		return Page{}, apperr.Invalid("unknown status %q", status)
 	}
 	limit, offset = clampPage(limit, offset)
 
@@ -158,7 +142,7 @@ func (s *Service) Update(ctx context.Context, orgID, id string, in Input) (Invoi
 // SetStatus applies a lifecycle transition.
 func (s *Service) SetStatus(ctx context.Context, orgID, id, to string) (Invoice, error) {
 	if !ValidStatus(to) {
-		return Invoice{}, invalid("unknown status %q", to)
+		return Invoice{}, apperr.Invalid("unknown status %q", to)
 	}
 
 	from, err := s.store.currentStatus(ctx, orgID, id)
@@ -169,7 +153,7 @@ func (s *Service) SetStatus(ctx context.Context, orgID, id, to string) (Invoice,
 		return s.store.get(ctx, orgID, id)
 	}
 	if !CanTransition(from, to) {
-		return Invoice{}, invalid("an invoice that is %s cannot become %s", from, to)
+		return Invoice{}, apperr.Invalid("an invoice that is %s cannot become %s", from, to)
 	}
 
 	if err := s.store.setStatus(ctx, orgID, id, from, to); err != nil {
@@ -186,9 +170,9 @@ func (s *Service) RecordPayment(ctx context.Context, orgID, id string, in Paymen
 
 	switch {
 	case in.Amount <= 0:
-		return Invoice{}, invalid("a payment must be greater than zero")
+		return Invoice{}, apperr.Invalid("a payment must be greater than zero")
 	case in.Amount > 1e12:
-		return Invoice{}, invalid("that payment amount is out of range")
+		return Invoice{}, apperr.Invalid("that payment amount is out of range")
 	}
 
 	if err := s.store.addPayment(ctx, orgID, id, in); err != nil {
@@ -296,42 +280,42 @@ func trimmedOrNil(v *string) *string {
 
 func validate(in Input) error {
 	if in.Title != nil && len(*in.Title) > 160 {
-		return invalid("title must be 160 characters or fewer")
+		return apperr.Invalid("title must be 160 characters or fewer")
 	}
 	if in.Notes != nil && len(*in.Notes) > 5000 {
-		return invalid("notes must be 5000 characters or fewer")
+		return apperr.Invalid("notes must be 5000 characters or fewer")
 	}
 	if in.IssueDate != nil && in.DueDate != nil && in.DueDate.Before(*in.IssueDate) {
-		return invalid("the due date cannot be before the issue date")
+		return apperr.Invalid("the due date cannot be before the issue date")
 	}
 	// account_id is NOT NULL in this deployment, so an invoice without one fails
 	// in the database with an opaque error. Reject it here, where the message can
 	// name the field.
 	if in.AccountID == nil || *in.AccountID == "" {
-		return invalid("an invoice needs a company")
+		return apperr.Invalid("an invoice needs a company")
 	}
 	if len(in.Items) == 0 {
-		return invalid("an invoice needs at least one line item")
+		return apperr.Invalid("an invoice needs at least one line item")
 	}
 	if len(in.Items) > maxItems {
-		return invalid("an invoice can have at most %d line items", maxItems)
+		return apperr.Invalid("an invoice can have at most %d line items", maxItems)
 	}
 
 	for i, item := range in.Items {
 		line := i + 1
 		switch {
 		case item.Description == "":
-			return invalid("line %d needs a description", line)
+			return apperr.Invalid("line %d needs a description", line)
 		case len(item.Description) > 500:
-			return invalid("line %d: description must be 500 characters or fewer", line)
+			return apperr.Invalid("line %d: description must be 500 characters or fewer", line)
 		case item.Quantity < 0 || item.Quantity > 1e6:
-			return invalid("line %d: quantity must be between 0 and 1,000,000", line)
+			return apperr.Invalid("line %d: quantity must be between 0 and 1,000,000", line)
 		case item.UnitPrice < 0 || item.UnitPrice > 1e10:
-			return invalid("line %d: unit price is out of range", line)
+			return apperr.Invalid("line %d: unit price is out of range", line)
 		case item.DiscountPercent < 0 || item.DiscountPercent > 100:
-			return invalid("line %d: discount must be between 0 and 100%%", line)
+			return apperr.Invalid("line %d: discount must be between 0 and 100%%", line)
 		case item.TaxPercent < 0 || item.TaxPercent > 100:
-			return invalid("line %d: tax must be between 0 and 100%%", line)
+			return apperr.Invalid("line %d: tax must be between 0 and 100%%", line)
 		}
 	}
 	return nil

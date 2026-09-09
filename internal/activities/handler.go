@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/httpx"
 	"github.com/go-crm/services/pkg/middleware"
 )
@@ -100,7 +101,7 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 	case errors.Is(err, ErrRefNotFound):
 		httpx.WriteError(w, http.StatusBadRequest,
 			"a referenced record is not part of your organization")
-	case IsValidation(err):
+	case apperr.IsValidation(err):
 		httpx.WriteError(w, http.StatusBadRequest, err.Error())
 	default:
 		httpx.WriteServerError(w, fallback, err)

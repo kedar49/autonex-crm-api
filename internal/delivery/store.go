@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-crm/services/pkg/apperr"
 	"github.com/go-crm/services/pkg/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -176,7 +177,7 @@ func (s *store) reorder(ctx context.Context, orgID string, ids []string) error {
 		  WHERE t.id = o.id AND t.org_id = $1`,
 		orgID, ids, positionStep)
 	if database.IsInvalidTextRepr(err) {
-		return invalid("one of those row ids is not valid")
+		return apperr.Invalid("one of those row ids is not valid")
 	}
 	return err
 }
