@@ -83,12 +83,18 @@ const accountColumns = `
 
 const accountFrom = ` FROM accounts a LEFT JOIN profiles p ON p.id = a.owner_id `
 
-func (s *store) list(ctx context.Context, _ string, limit, offset int) ([]Account, error) {
+const searchClause = `
+	WHERE a.deleted_at IS NULL
+	  AND ($1 = '' OR
+	       position($1 in lower(a.name))                    > 0 OR
+	       position($1 in lower(coalesce(a.domain, '')))    > 0 OR
+	       position($1 in lower(coalesce(a.industry, '')))  > 0)`
+
+func (s *store) list(ctx context.Context, _ string, search string, limit, offset int) ([]Account, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+accountColumns+accountFrom+
-			`WHERE a.deleted_at IS NULL
-			 ORDER BY a.created_at DESC, a.id
-			 LIMIT $1 OFFSET $2`, limit, offset)
+		`SELECT `+accountColumns+accountFrom+searchClause+
+			` ORDER BY a.created_at DESC, a.id
+			 LIMIT $2 OFFSET $3`, search, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -106,10 +112,10 @@ func (s *store) list(ctx context.Context, _ string, limit, offset int) ([]Accoun
 	return out, rows.Err()
 }
 
-func (s *store) count(ctx context.Context, _ string) (int, error) {
+func (s *store) count(ctx context.Context, _ string, search string) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM accounts WHERE deleted_at IS NULL`).Scan(&n)
+		`SELECT count(*) FROM accounts a`+searchClause, search).Scan(&n)
 	return n, err
 }
 

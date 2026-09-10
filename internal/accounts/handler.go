@@ -40,7 +40,8 @@ func (h *Handler) Routes() chi.Router {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paging.Params(r)
 
-	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), limit, offset)
+	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()),
+		r.URL.Query().Get("search"), limit, offset)
 	if err != nil {
 		httpx.WriteServerError(w, "could not list accounts", err)
 		return

@@ -13,7 +13,7 @@ import (
 // deployed database enforces through deals_stage_check.
 var Stages = []string{
 	"discovery", "site_assessment", "quote_sent", "negotiation",
-	"delivery", "post_delivery", "won",
+	"won", "delivery", "post_delivery",
 }
 
 // maxBoard caps a board fetch — well above a realistic pipeline, low enough that

@@ -44,14 +44,15 @@ func newService(pool *pgxpool.Pool) *Service {
 }
 
 // List returns one org-scoped page of accounts, newest first.
-func (s *Service) List(ctx context.Context, orgID string, limit, offset int) (Page, error) {
+func (s *Service) List(ctx context.Context, orgID, search string, limit, offset int) (Page, error) {
 	limit, offset = clampPage(limit, offset)
+	search = strings.ToLower(strings.TrimSpace(search))
 
-	items, err := s.store.list(ctx, orgID, limit, offset)
+	items, err := s.store.list(ctx, orgID, search, limit, offset)
 	if err != nil {
 		return Page{}, err
 	}
-	total, err := s.store.count(ctx, orgID)
+	total, err := s.store.count(ctx, orgID, search)
 	if err != nil {
 		return Page{}, err
 	}

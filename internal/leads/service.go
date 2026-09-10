@@ -37,11 +37,11 @@ const (
 
 const (
 	defaultLimit = 25
-	// 500, not 100: the deal form's lead picker asks for every lead filed under
-	// one company, and the largest companies here carry well over a hundred. A
-	// cap below that silently truncated the dropdown, which looked like the
-	// company's leads were missing rather than cut off.
-	maxLimit = 500
+	// 1000, not 100: the deal form's lead picker offers every lead in the
+	// workspace when no company is chosen yet, and every lead filed under one
+	// company once it is. Any cap below the workspace total silently truncated
+	// that dropdown, which read as leads being missing rather than cut off.
+	maxLimit = 1000
 )
 
 // Input is the writable shape of a lead.

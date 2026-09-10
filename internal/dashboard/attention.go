@@ -97,6 +97,23 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 		     AND i.due_date IS NOT NULL
 		     AND i.due_date <= CURRENT_DATE + 3
 		     AND i.amount_due > paid.amt
+
+		  UNION ALL
+
+		  -- Deals running past their expected close date. A deal that has landed
+		  -- cannot be late, and one still in delivery is being worked rather than
+		  -- slipping, so only the stages that are still being *sold* count.
+		  SELECT 'deal', d.id::text,
+		         d.title,
+		         coalesce(ac.name, ''),
+		         (d.expected_close_date - CURRENT_DATE)::int,
+		         d.amount::float8
+		    FROM deals d
+		    LEFT JOIN accounts ac ON ac.id = d.account_id
+		   WHERE d.deleted_at IS NULL
+		     AND d.stage IN ('discovery', 'site_assessment', 'quote_sent', 'negotiation')
+		     AND d.expected_close_date IS NOT NULL
+		     AND d.expected_close_date <= CURRENT_DATE + 3
 		)
 		SELECT kind, id, label, detail, days, amount
 		  FROM items
