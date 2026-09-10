@@ -295,8 +295,22 @@ func (s *store) advance(
 	return nil
 }
 
+// delete retires a lead.
+//
+// Soft, for the same reason deals are: deals.lead_id references leads with no ON
+// DELETE clause, so a hard delete of any *converted* lead was refused by Postgres
+// — and the violation surfaced through translate() as "that owner, company or
+// contact is not part of your organization", which explains nothing and left the
+// lead on the board. Converted leads were therefore undeletable.
+//
+// Soft delete is also the honest model: the deal a lead became still points back
+// at where it came from, and that trail is what the pipeline reports on. Every
+// read in this module already filters deleted_at, so a retired lead leaves every
+// list, count and board.
 func (s *store) delete(ctx context.Context, _, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM leads WHERE id = $1`, id)
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE leads SET deleted_at = now(), updated_at = now()
+		  WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return translate(err)
 	}
