@@ -117,8 +117,6 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 	httpx.WriteDomainError(w, err, fallback,
 		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
 			Message: "account not found"},
-		httpx.Rule{Err: ErrInUse, Status: http.StatusConflict,
-			Message: "unlink its contacts and deals before deleting this account"},
 		httpx.Rule{Err: ErrOwnerNotFound, Status: http.StatusBadRequest,
 			Message: "that owner is not a member of your organization"},
 	)

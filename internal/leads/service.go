@@ -37,7 +37,11 @@ const (
 
 const (
 	defaultLimit = 25
-	maxLimit     = 100
+	// 500, not 100: the deal form's lead picker asks for every lead filed under
+	// one company, and the largest companies here carry well over a hundred. A
+	// cap below that silently truncated the dropdown, which looked like the
+	// company's leads were missing rather than cut off.
+	maxLimit = 500
 )
 
 // Input is the writable shape of a lead.
@@ -102,18 +106,28 @@ func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{store: &store{pool: pool}}
 }
 
+// Query is everything that narrows a lead list: the stage/urgency filter behind
+// the funnel tiles, the search box, and an account for the deal form's picker.
+// Grouped into a struct because all three travel together through the service
+// and the store, and a fifth positional string argument would be unreadable.
+type Query struct {
+	Filter    string
+	Search    string
+	AccountID string
+}
+
 // List returns one org-scoped page, sorted by urgency.
-func (s *Service) List(ctx context.Context, orgID, filter string, limit, offset int) (Page, error) {
-	if filter != "" && !ValidFilter(filter) {
-		return Page{}, apperr.Invalid("unknown filter %q", filter)
+func (s *Service) List(ctx context.Context, orgID string, q Query, limit, offset int) (Page, error) {
+	if q.Filter != "" && !ValidFilter(q.Filter) {
+		return Page{}, apperr.Invalid("unknown filter %q", q.Filter)
 	}
 	limit, offset = clampPage(limit, offset)
 
-	items, err := s.store.list(ctx, orgID, filter, limit, offset)
+	items, err := s.store.list(ctx, orgID, q, limit, offset)
 	if err != nil {
 		return Page{}, err
 	}
-	total, err := s.store.count(ctx, orgID, filter)
+	total, err := s.store.count(ctx, orgID, q)
 	if err != nil {
 		return Page{}, err
 	}

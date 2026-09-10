@@ -33,8 +33,6 @@ var (
 	ErrNotFound = errors.New("account not found")
 	// ErrOwnerNotFound means the assignee does not exist.
 	ErrOwnerNotFound = errors.New("owner is not a member of this organization")
-	// ErrInUse means contacts or deals still reference the account.
-	ErrInUse = errors.New("account is still referenced")
 )
 
 // Account is the module's view of a row, plus the two counts a list needs to be
@@ -150,9 +148,24 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Account
 	return s.get(ctx, orgID, id)
 }
 
-// delete removes a company only when nothing points at it. Deleting a linked
-// company would orphan contacts and cascade into deals, so refusing is the safe
-// reading of an ambiguous request; the caller can unlink first.
+// delete retires a company and everything filed under it.
+//
+// It used to refuse whenever a contact or a deal still pointed at the company,
+// which made every company anyone had actually worked undeletable. Deleting one
+// now takes its contacts, leads, deals, quotes and invoices with it, in a single
+// transaction, so the company does not leave a trail of records nothing can
+// reach.
+//
+// Soft throughout, for the reason a hard delete could not work anyway: leads,
+// deals, quotes and invoices all reference accounts with no ON DELETE clause, so
+// Postgres refused the delete outright. Every read in those modules filters
+// deleted_at, so the whole set disappears together and can be brought back by
+// clearing the timestamps.
+//
+// The delivery tracker is the one hard delete here, and the one thing that does
+// not come back: those rows have no deleted_at column, and a delivery line for a
+// retired company's deal describes work that is no longer happening. They go
+// first, while the deals they hang off can still be identified.
 func (s *store) delete(ctx context.Context, _, id string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -160,26 +173,34 @@ func (s *store) delete(ctx context.Context, _, id string) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var contacts, deals int
-	if err := tx.QueryRow(ctx,
-		// Retired children do not count: a deal someone deleted must not keep the
-		// account undeletable forever.
-		`SELECT (SELECT count(*) FROM contacts WHERE account_id = $1 AND deleted_at IS NULL),
-		        (SELECT count(*) FROM deals    WHERE account_id = $1 AND deleted_at IS NULL)`,
-		id).Scan(&contacts, &deals); err != nil {
-		return translate(err)
-	}
-	if contacts > 0 || deals > 0 {
-		return ErrInUse
-	}
-
-	tag, err := tx.Exec(ctx, `DELETE FROM accounts WHERE id = $1`, id)
+	tag, err := tx.Exec(ctx,
+		`UPDATE accounts SET deleted_at = now(), updated_at = now()
+		  WHERE id = $1 AND deleted_at IS NULL`, id)
 	if err != nil {
 		return translate(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM delivery_tracker
+		  WHERE deal_id IN (SELECT id FROM deals WHERE account_id = $1)`,
+		id); err != nil {
+		return err
+	}
+
+	// Every table that files a record under a company. quote_items and
+	// invoice_items hang off their parents and are read through them, so
+	// retiring the parent is enough.
+	for _, table := range []string{"contacts", "leads", "deals", "quotes", "invoices"} {
+		if _, err := tx.Exec(ctx,
+			`UPDATE `+table+` SET deleted_at = now()
+			  WHERE account_id = $1 AND deleted_at IS NULL`, id); err != nil {
+			return translate(err)
+		}
+	}
+
 	return tx.Commit(ctx)
 }
 

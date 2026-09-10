@@ -68,7 +68,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := paging.Params(r)
 
-	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), q.Get("filter"), limit, offset)
+	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), Query{
+		Filter:    q.Get("filter"),
+		Search:    q.Get("search"),
+		AccountID: q.Get("accountId"),
+	}, limit, offset)
 	if err != nil {
 		writeErr(w, err, "could not list leads")
 		return

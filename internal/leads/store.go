@@ -132,6 +132,15 @@ const urgencyOrder = `
 // This deployment is single-tenant: lead rows carry no organization link, so
 // there is no org predicate to apply. Rows soft-deleted through deleted_at are
 // excluded here and in every other read below.
+//
+// $2 is a free-text search and $3 an account id, both optional and both empty by
+// default. They live here rather than in the list query alone so the paging
+// total counts the same rows the page shows.
+//
+// The search runs on the server because the client cannot do it: the list is
+// paged 25 at a time out of hundreds of leads, so filtering the fetched page
+// searched whatever happened to be on screen and reported "no results" for
+// leads that were simply on another page.
 const filterClause = `
 	WHERE l.deleted_at IS NULL
 	  AND ($1 = '' OR
@@ -141,12 +150,25 @@ const filterClause = `
 	       ($1 = 'due_today' AND l.next_follow_up_date = CURRENT_DATE
 	                         AND l.status NOT IN ('closed','not interested','converted')) OR
 	       ($1 = 'open'      AND l.status NOT IN ('closed','not interested','converted')) OR
-	       ($1 NOT IN ('overdue','due_today','open') AND l.status = $1))`
+	       ($1 NOT IN ('overdue','due_today','open') AND l.status = $1))
+	  -- position() over a lowercased term, not ILIKE: the term is then a literal
+	  -- substring, so a search containing % or _ finds those characters instead
+	  -- of matching everything, with no escape-character handling to get wrong.
+	  AND ($2 = '' OR
+	       position($2 in lower(coalesce(l.contact_name, ''))) > 0 OR
+	       position($2 in lower(coalesce(l.title, '')))        > 0 OR
+	       position($2 in lower(coalesce(l.email, '')))        > 0 OR
+	       position($2 in lower(coalesce(l.phone, '')))        > 0 OR
+	       position($2 in lower(coalesce(l.job_title, '')))    > 0 OR
+	       position($2 in lower(coalesce(c.name, '')))         > 0)
+	  -- Compared as text so a malformed id is an empty result rather than a
+	  -- failed cast, which is what a stale picker would otherwise send.
+	  AND ($3 = '' OR l.account_id::text = $3)`
 
-func (s *store) list(ctx context.Context, _, filter string, limit, offset int) ([]Lead, error) {
+func (s *store) list(ctx context.Context, _ string, q Query, limit, offset int) ([]Lead, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+leadColumns+leadFrom+filterClause+urgencyOrder+`
-		 LIMIT $2 OFFSET $3`, filter, limit, offset)
+		 LIMIT $4 OFFSET $5`, q.Filter, searchTerm(q.Search), q.AccountID, limit, offset)
 	if err != nil {
 		return nil, translate(err)
 	}
@@ -163,11 +185,22 @@ func (s *store) list(ctx context.Context, _, filter string, limit, offset int) (
 	return out, rows.Err()
 }
 
-func (s *store) count(ctx context.Context, _, filter string) (int, error) {
+// count joins accounts because the search matches on the company name; without
+// it the total would disagree with the page whenever someone searched a company.
+func (s *store) count(ctx context.Context, _ string, q Query) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM leads l `+filterClause, filter).Scan(&n)
+		`SELECT count(*) FROM leads l
+		   LEFT JOIN accounts c ON c.id = l.account_id `+filterClause,
+		q.Filter, searchTerm(q.Search), q.AccountID).Scan(&n)
 	return n, err
+}
+
+// searchTerm normalizes a search box's contents for the position() comparisons
+// above. Empty is what switches the search off in SQL, so a term of only spaces
+// has to come back empty rather than matching every row that contains a space.
+func searchTerm(term string) string {
+	return strings.ToLower(strings.TrimSpace(term))
 }
 
 // counts powers the funnel strip and the filter pills in one round-trip.
