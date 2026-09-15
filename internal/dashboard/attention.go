@@ -25,11 +25,18 @@ type Attention struct {
 
 // Recent is one timeline entry, flattened for the dashboard's activity strip.
 type Recent struct {
-	Kind    string    `json:"kind"`
-	Subject string    `json:"subject"`
-	Body    string    `json:"body"`
-	Actor   string    `json:"actor"`
-	At      time.Time `json:"at"`
+	// Kind is the activity type ("note", "call"); Entity is what it happened to.
+	Kind   string `json:"kind"`
+	Entity string `json:"entity"`
+	// Subject names the record itself — the deal's title, the lead's contact,
+	// the company's name — so a row reads as "Call · Hindalco Upstream" rather
+	// than the bare word "deal" it used to show.
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+	Actor   string `json:"actor"`
+	// ActionURL is where the row leads; empty when the record has no page.
+	ActionURL string    `json:"actionUrl"`
+	At        time.Time `json:"at"`
 }
 
 // attentionLimit keeps the queue a queue. A dashboard that lists forty problems
@@ -114,11 +121,42 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 		     AND d.stage IN ('discovery', 'site_assessment', 'quote_sent', 'negotiation')
 		     AND d.expected_close_date IS NOT NULL
 		     AND d.expected_close_date <= CURRENT_DATE + 3
+
+		  UNION ALL
+
+		  -- Actions the Actions board is already reporting as due or overdue.
+		  -- Without this arm the two surfaces disagreed: an action three days
+		  -- late was red on its own dashboard and invisible on this one.
+		  SELECT 'action', f.id::text,
+		         f.title,
+		         coalesce(ac.name, ''),
+		         (f.due_at::date - CURRENT_DATE)::int,
+		         0::float8
+		    FROM follow_ups f
+		    LEFT JOIN accounts ac ON ac.id = f.account_id
+		   WHERE f.org_id = $2::uuid
+		     AND f.status <> 'done'
+		     AND f.due_at::date <= CURRENT_DATE + 2
+
+		  UNION ALL
+
+		  -- Deal tasks carry no due date of their own, so only the high-priority
+		  -- ones surface here, and only while their deal is still being sold.
+		  SELECT 'task', t.id::text,
+		         t.text,
+		         coalesce(d.title, ''),
+		         0,
+		         0::float8
+		    FROM deal_tasks t
+		    JOIN deals d ON d.id = t.deal_id AND d.deleted_at IS NULL
+		   WHERE t.done = false
+		     AND t.priority = 'high'
+		     AND d.stage IN ('discovery', 'site_assessment', 'quote_sent', 'negotiation')
 		)
 		SELECT kind, id, label, detail, days, amount
 		  FROM items
 		 ORDER BY days ASC, amount DESC
-		 LIMIT $1`, attentionLimit)
+		 LIMIT $1`, attentionLimit, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,14 +176,34 @@ func (h *Handler) attention(ctx context.Context, orgID string) ([]Attention, err
 const recentLimit = 6
 
 // recent reads the tail of the timeline across every record in the org.
+//
+// The joins resolve each entry's subject and its link. activities stores only
+// an entity type and id, so without them the strip showed the word "deal" and
+// led nowhere — true, and useless.
 func (h *Handler) recent(ctx context.Context, orgID string) ([]Recent, error) {
 	rows, err := h.pool.Query(ctx, `
-		-- No subject column in this schema; the entity type stands in as the
-		-- one-word heading the timeline row shows above its body.
-		SELECT a.type, a.entity_type, coalesce(a.body, ''),
-		       coalesce(p.full_name, ''), a.occurred_at
+		SELECT a.type,
+		       a.entity_type,
+		       coalesce(
+		         d.title,
+		         nullif(trim(l.contact_name), ''),
+		         ac.name,
+		         initcap(a.entity_type)
+		       )                                              AS subject,
+		       coalesce(a.body, '')                           AS body,
+		       coalesce(p.full_name, '')                      AS actor,
+		       CASE a.entity_type
+		         WHEN 'deal'    THEN '/deals'
+		         WHEN 'lead'    THEN '/leads'
+		         WHEN 'account' THEN '/accounts/' || a.entity_id::text
+		         ELSE ''
+		       END                                            AS action_url,
+		       a.occurred_at
 		  FROM activities a
-		  LEFT JOIN profiles p ON p.id = a.author_id
+		  LEFT JOIN profiles p  ON p.id = a.author_id
+		  LEFT JOIN deals    d  ON a.entity_type = 'deal'    AND d.id = a.entity_id
+		  LEFT JOIN leads    l  ON a.entity_type = 'lead'    AND l.id = a.entity_id
+		  LEFT JOIN accounts ac ON a.entity_type = 'account' AND ac.id = a.entity_id
 		 ORDER BY a.occurred_at DESC, a.created_at DESC
 		 LIMIT $1`, recentLimit)
 	if err != nil {
@@ -156,7 +214,7 @@ func (h *Handler) recent(ctx context.Context, orgID string) ([]Recent, error) {
 	items := make([]Recent, 0, recentLimit)
 	for rows.Next() {
 		var r Recent
-		if err := rows.Scan(&r.Kind, &r.Subject, &r.Body, &r.Actor, &r.At); err != nil {
+		if err := rows.Scan(&r.Kind, &r.Entity, &r.Subject, &r.Body, &r.Actor, &r.ActionURL, &r.At); err != nil {
 			return nil, err
 		}
 		items = append(items, r)

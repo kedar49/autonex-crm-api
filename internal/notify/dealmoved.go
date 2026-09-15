@@ -65,7 +65,11 @@ func (n *Notifier) Store() *Store {
 // follows. The trade is that a failure is logged rather than surfaced — the
 // right balance for a notification, which is not the point of the request.
 func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv DealMove) {
-	if n == nil || n.mail == nil || n.pool == nil {
+	// The mailer being unconfigured used to short-circuit this whole method,
+	// which meant the in-app bell stayed empty on a deployment with no SMTP.
+	// The two deliveries are now independent: the notification row is written
+	// either way, and only the email needs a relay.
+	if n == nil || n.pool == nil {
 		return
 	}
 	if mv.FromStage == mv.ToStage {
@@ -79,6 +83,12 @@ func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv Deal
 	go func() {
 		defer cancel()
 
+		company, currency, actor := n.details(sendCtx, orgID, mv.AccountID, actorID)
+		n.recordDealMoved(sendCtx, orgID, actorID, mv, company)
+
+		if n.mail == nil {
+			return
+		}
 		to, err := n.orgRecipients(sendCtx, orgID)
 		if err != nil {
 			log.Printf("notify: could not resolve recipients for deal %s: %v", mv.DealID, err)
@@ -87,7 +97,6 @@ func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv Deal
 		if len(to) == 0 {
 			return
 		}
-		company, currency, actor := n.details(sendCtx, orgID, mv.AccountID, actorID)
 		if err := n.mail.Send(sendCtx, mailer.Message{
 			To:      to,
 			Subject: dealMovedSubject(mv),
@@ -96,6 +105,78 @@ func (n *Notifier) DealMoved(ctx context.Context, orgID, actorID string, mv Deal
 			log.Printf("notify: deal %s move email failed: %v", mv.DealID, err)
 		}
 	}()
+}
+
+// recordDealMoved writes the in-app notification every member of the org sees
+// in their bell, skipping the person who moved the card: they were there.
+func (n *Notifier) recordDealMoved(ctx context.Context, orgID, actorID string, mv DealMove, company string) {
+	if n.store == nil {
+		return
+	}
+
+	members, err := n.orgMemberIDs(ctx, orgID)
+	if err != nil {
+		log.Printf("notify: could not resolve members for deal %s: %v", mv.DealID, err)
+		return
+	}
+
+	stage := mv.ToStage
+	if mv.StageLabel != nil {
+		stage = mv.StageLabel(mv.ToStage)
+	}
+
+	body := fmt.Sprintf("%s moved to %s", strings.TrimSpace(mv.Title), stage)
+	if company != "" {
+		body = fmt.Sprintf("%s · %s moved to %s", company, strings.TrimSpace(mv.Title), stage)
+	}
+
+	// A won deal is worth interrupting someone for; the rest are FYI.
+	priority := "info"
+	if mv.ToStage == "won" {
+		priority = "success"
+	}
+
+	for _, userID := range members {
+		if userID == actorID {
+			continue
+		}
+		if _, err := n.store.CreateNotification(ctx, NotificationItem{
+			OrgID:     orgID,
+			UserID:    userID,
+			Type:      "deal_moved",
+			Title:     "Deal moved",
+			Body:      body,
+			ActionURL: "/deals",
+			Priority:  priority,
+		}); err != nil {
+			log.Printf("notify: could not record deal %s notification: %v", mv.DealID, err)
+			return
+		}
+	}
+}
+
+// orgMemberIDs lists the profile ids of everyone in the organization — the
+// audience for an org-wide notification.
+func (n *Notifier) orgMemberIDs(ctx context.Context, orgID string) ([]string, error) {
+	rows, err := n.pool.Query(ctx,
+		`SELECT u.id::text
+		   FROM users u
+		   JOIN profiles p ON p.id = u.id
+		  WHERE u.org_id = $1::uuid`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]string, 0, 8)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // orgRecipients lists everyone in the organization, the person who moved the
