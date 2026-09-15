@@ -60,11 +60,39 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 // offers. Every param is optional.
 func parseFilter(w http.ResponseWriter, r *http.Request) (Filter, bool) {
 	q := r.URL.Query()
-	f := Filter{AccountID: q.Get("accountId"), Status: q.Get("status")}
+	f := Filter{
+		AccountID:  q.Get("accountId"),
+		LeadID:     q.Get("leadId"),
+		Status:     q.Get("status"),
+		AssignedTo: q.Get("assignedTo"),
+	}
 
 	if v := q.Get("status"); v != "" && !validStatus(v) {
 		httpx.WriteError(w, http.StatusBadRequest, "status must be one of open, in_progress, done")
 		return Filter{}, false
+	}
+	// Filters are cast to uuid in SQL, so a malformed value would surface
+	// as a 500 rather than the client error it actually is.
+	if v := f.AccountID; v != "" && !isUUID(v) {
+		httpx.WriteError(w, http.StatusBadRequest, "accountId must be a UUID")
+		return Filter{}, false
+	}
+	if v := f.LeadID; v != "" && !isUUID(v) {
+		httpx.WriteError(w, http.StatusBadRequest, "leadId must be a UUID")
+		return Filter{}, false
+	}
+	if v := f.AssignedTo; v != "" && !isUUID(v) {
+		httpx.WriteError(w, http.StatusBadRequest, "assignedTo must be a UUID")
+		return Filter{}, false
+	}
+	// excludeDone lets the dashboard's "active" views line up with their counts
+	// without asking for two statuses in one request.
+	if v := q.Get("excludeDone"); v != "" {
+		if v != "true" && v != "false" {
+			httpx.WriteError(w, http.StatusBadRequest, "excludeDone must be true or false")
+			return Filter{}, false
+		}
+		f.ExcludeDone = v == "true"
 	}
 	if v := q.Get("dueBefore"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
@@ -144,7 +172,32 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 			Message: "action not found"},
 		httpx.Rule{Err: ErrAccountNotFound, Status: http.StatusBadRequest,
 			Message: "unknown account"},
+		httpx.Rule{Err: ErrLeadNotFound, Status: http.StatusBadRequest,
+			Message: "unknown lead"},
 		httpx.Rule{Err: ErrAssigneeNotFound, Status: http.StatusBadRequest,
 			Message: "unknown assignee"},
 	)
+}
+
+// isUUID reports whether s is a canonical 8-4-4-4-12 hex UUID. Query filters
+// are interpolated into ::uuid casts, and Postgres answers a bad cast with an
+// error, not an empty result.
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+			if !isHex {
+				return false
+			}
+		}
+	}
+	return true
 }

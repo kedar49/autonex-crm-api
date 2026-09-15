@@ -26,6 +26,9 @@ var (
 	// ErrAssigneeNotFound means the referenced assignee isn't a member of the
 	// caller's org.
 	ErrAssigneeNotFound = errors.New("assignee not found")
+	// ErrLeadNotFound means the referenced lead is missing or belongs to
+	// another org.
+	ErrLeadNotFound = errors.New("lead not found")
 )
 
 // Action is one row of the Actions dashboard.
@@ -53,10 +56,15 @@ const actionColumns = `id::text, title, due_at, status, assigned_to::text, accou
 // Filter narrows the org's action list; every field is optional (a zero value
 // means "no opinion"), and an empty filter returns the org's whole list.
 type Filter struct {
-	AccountID string
-	Status    string
-	DueBefore *time.Time
-	DueAfter  *time.Time
+	AccountID   string
+	LeadID      string
+	Status      string
+	AssignedTo  string
+	DueBefore   *time.Time
+	DueAfter    *time.Time
+	// ExcludeDone drops completed actions. It is independent of Status so the
+	// dashboard can ask for "everything still outstanding" in one query.
+	ExcludeDone bool
 }
 
 func (s *store) list(ctx context.Context, orgID string, f Filter) ([]Action, error) {
@@ -64,12 +72,15 @@ func (s *store) list(ctx context.Context, orgID string, f Filter) ([]Action, err
 		`SELECT `+actionColumns+`
 		 FROM follow_ups
 		 WHERE org_id = $1
-		   AND ($2 = '' OR account_id = $2::uuid)
+		   AND ($2 = '' OR account_id = NULLIF($2, '')::uuid)
 		   AND ($3 = '' OR status = $3)
 		   AND ($4::timestamptz IS NULL OR due_at <= $4)
 		   AND ($5::timestamptz IS NULL OR due_at >= $5)
+		   AND ($6 = '' OR assigned_to = NULLIF($6, '')::uuid)
+		   AND (NOT $7::boolean OR status <> 'done')
+		   AND ($8 = '' OR lead_id = NULLIF($8, '')::uuid)
 		 ORDER BY due_at ASC`,
-		orgID, f.AccountID, f.Status, f.DueBefore, f.DueAfter)
+		orgID, f.AccountID, f.Status, f.DueBefore, f.DueAfter, f.AssignedTo, f.ExcludeDone, f.LeadID)
 	if err != nil {
 		return nil, err
 	}
@@ -94,22 +105,22 @@ func (s *store) get(ctx context.Context, orgID, id string) (Action, error) {
 
 func (s *store) create(ctx context.Context, orgID string, in Input) (Action, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO follow_ups (org_id, title, due_at, assigned_to, account_id)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO follow_ups (org_id, title, due_at, assigned_to, account_id, lead_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING `+actionColumns,
-		orgID, in.Title, in.DueAt, in.AssignedTo, in.AccountID)
+		orgID, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID)
 	return scanAction(row)
 }
 
 func (s *store) update(ctx context.Context, orgID, id string, in Input) (Action, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE follow_ups
-		 SET title = $3, due_at = $4, assigned_to = $5, account_id = $6, status = $7,
-		     completed_at = CASE WHEN $7 = 'done' THEN coalesce(completed_at, now()) ELSE NULL END,
+		 SET title = $3, due_at = $4, assigned_to = $5, account_id = $6, lead_id = $7, status = $8,
+		     completed_at = CASE WHEN $8 = 'done' THEN coalesce(completed_at, now()) ELSE NULL END,
 		     updated_at = now()
 		 WHERE org_id = $1 AND id = $2
 		 RETURNING `+actionColumns,
-		orgID, id, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.Status)
+		orgID, id, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.Status)
 	return scanAction(row)
 }
 
@@ -152,12 +163,32 @@ func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool
 	return exists, nil
 }
 
-// assigneeInOrg reports whether userID names a user in orgID. Assignees are
-// users, not profiles — profiles carries no org_id of its own.
+// leadInOrg reports whether leadID names a lead in orgID.
+func (s *store) leadInOrg(ctx context.Context, orgID, leadID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM leads WHERE org_id = $1 AND id = $2)`,
+		orgID, leadID).Scan(&exists)
+	if err != nil {
+		if database.IsInvalidTextRepr(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return exists, nil
+}
+
+// assigneeInOrg reports whether userID names a user with a profile in orgID.
+// Assignees must be members of the caller's organization and have a profile row
+// to satisfy follow_ups_assigned_to_fkey.
 func (s *store) assigneeInOrg(ctx context.Context, orgID, userID string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM users WHERE org_id = $1 AND id = $2)`,
+		`SELECT EXISTS (
+			SELECT 1 FROM users u
+			JOIN profiles p ON p.id = u.id
+			WHERE u.org_id = $1 AND u.id = $2
+		)`,
 		orgID, userID).Scan(&exists)
 	if err != nil {
 		if database.IsInvalidTextRepr(err) {

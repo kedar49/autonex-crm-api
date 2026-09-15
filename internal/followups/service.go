@@ -28,6 +28,7 @@ type Input struct {
 	DueAt      time.Time `json:"dueAt"`
 	AssignedTo *string   `json:"assignedTo"`
 	AccountID  *string   `json:"accountId"`
+	LeadID     *string   `json:"leadId"`
 	Status     string    `json:"status"`
 }
 
@@ -98,6 +99,15 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input, requireSt
 			return Input{}, ErrAccountNotFound
 		}
 	}
+	if in.LeadID != nil {
+		ok, err := s.store.leadInOrg(ctx, orgID, *in.LeadID)
+		if err != nil {
+			return Input{}, err
+		}
+		if !ok {
+			return Input{}, ErrLeadNotFound
+		}
+	}
 	if in.AssignedTo != nil {
 		ok, err := s.store.assigneeInOrg(ctx, orgID, *in.AssignedTo)
 		if err != nil {
@@ -114,6 +124,7 @@ func normalize(in Input) Input {
 	in.Title = strings.TrimSpace(in.Title)
 	in.AssignedTo = trimmedOrNil(in.AssignedTo)
 	in.AccountID = trimmedOrNil(in.AccountID)
+	in.LeadID = trimmedOrNil(in.LeadID)
 	in.Status = strings.TrimSpace(in.Status)
 	return in
 }

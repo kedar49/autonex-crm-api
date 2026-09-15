@@ -163,7 +163,7 @@ func (s *Service) Accept(ctx context.Context, token, name, password string) (Ses
 	}
 
 	user := auth.User{
-		ID: u.ID, Email: u.Email, OrgID: u.OrgID,
+		ID: u.ID, Email: u.Email, OrgID: u.OrgID, Role: u.Role,
 		Name: nilIfEmpty(strings.TrimSpace(name)), AuthProvider: "password",
 	}
 
@@ -179,6 +179,35 @@ func (s *Service) Accept(ctx context.Context, token, name, password string) (Ses
 		RefreshToken:     session.RefreshToken,
 		RefreshExpiresAt: session.RefreshExpiresAt,
 	}, nil
+}
+
+var validRoles = map[string]bool{
+	"owner":           true,
+	"admin":           true,
+	"sales":           true,
+	"account_manager": true,
+	"client":          true,
+}
+
+// UpdateMemberRole sets the profile role of a member in the organization.
+//
+// The caller's own role is the ceiling on what they may hand out: an admin can
+// staff their team, but only an owner can create or unseat another owner, and
+// nobody may edit their own role — otherwise an admin could promote themselves
+// past the guard that is meant to contain them. The last-owner check lives in
+// the store, where it shares a transaction with the write it protects.
+func (s *Service) UpdateMemberRole(ctx context.Context, orgID, actorID, actorRole, memberID, role string) (Member, error) {
+	role = strings.TrimSpace(role)
+	if !validRoles[role] {
+		return Member{}, apperr.Invalid("invalid role: must be owner, admin, account_manager, sales, or client")
+	}
+	if memberID == actorID {
+		return Member{}, ErrSelfRoleChange
+	}
+	if role == "owner" && actorRole != "owner" {
+		return Member{}, ErrOwnerOnly
+	}
+	return s.store.updateMemberRole(ctx, orgID, actorRole, memberID, role)
 }
 
 // inviteURL points at the SPA page that collects a name and password. The token
