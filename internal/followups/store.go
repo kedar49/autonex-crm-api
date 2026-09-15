@@ -34,6 +34,9 @@ var (
 	// lead does not belong to. The dialog can't produce this, but a direct API
 	// call can, and it would file the action under the wrong client.
 	ErrLeadAccountMismatch = errors.New("lead belongs to a different account")
+
+	// ErrDealNotFound means the referenced deal is missing or deleted.
+	ErrDealNotFound = errors.New("deal not found")
 )
 
 // Action is one row of the Actions dashboard.
@@ -63,6 +66,7 @@ const actionColumns = `id::text, title, due_at, status, assigned_to::text, accou
 type Filter struct {
 	AccountID  string
 	LeadID     string
+	DealID     string
 	Status     string
 	AssignedTo string
 	DueBefore  *time.Time
@@ -83,6 +87,7 @@ func (s *store) list(ctx context.Context, orgID string, f Filter) ([]Action, err
 		   AND ($5::timestamptz IS NULL OR due_at >= $5)
 		   AND ($6 = '' OR assigned_to = NULLIF($6, '')::uuid)
 		   AND (NOT $7::boolean OR status <> 'done')
+		   AND ($8 = '' OR deal_id = NULLIF($8, '')::uuid)
 		   AND ($8 = '' OR lead_id = NULLIF($8, '')::uuid)
 		 ORDER BY due_at ASC`,
 		orgID, f.AccountID, f.Status, f.DueBefore, f.DueAfter, f.AssignedTo, f.ExcludeDone, f.LeadID)
@@ -110,10 +115,10 @@ func (s *store) get(ctx context.Context, orgID, id string) (Action, error) {
 
 func (s *store) create(ctx context.Context, orgID string, in Input) (Action, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO follow_ups (org_id, title, due_at, assigned_to, account_id, lead_id)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO follow_ups (org_id, title, due_at, assigned_to, account_id, lead_id, deal_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING `+actionColumns,
-		orgID, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID)
+		orgID, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.DealID)
 	return scanAction(row)
 }
 
@@ -121,11 +126,12 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Action,
 	row := s.pool.QueryRow(ctx,
 		`UPDATE follow_ups
 		 SET title = $3, due_at = $4, assigned_to = $5, account_id = $6, lead_id = $7, status = $8,
+		     deal_id = $9,
 		     completed_at = CASE WHEN $8 = 'done' THEN coalesce(completed_at, now()) ELSE NULL END,
 		     updated_at = now()
 		 WHERE org_id = $1 AND id = $2
 		 RETURNING `+actionColumns,
-		orgID, id, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.Status)
+		orgID, id, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.Status, in.DealID)
 	return scanAction(row)
 }
 
@@ -166,6 +172,22 @@ func (s *store) accountExists(ctx context.Context, accountID string) (bool, erro
 	if err != nil {
 		if database.IsInvalidTextRepr(err) {
 			return false, nil // malformed id can't name an account
+		}
+		return false, err
+	}
+	return exists, nil
+}
+
+// dealExists reports whether dealID names a live deal. Like accounts and leads,
+// deals carry no org_id in this schema.
+func (s *store) dealExists(ctx context.Context, dealID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM deals WHERE id = $1 AND deleted_at IS NULL)`,
+		dealID).Scan(&exists)
+	if err != nil {
+		if database.IsInvalidTextRepr(err) {
+			return false, nil // malformed id can't name a deal
 		}
 		return false, err
 	}
