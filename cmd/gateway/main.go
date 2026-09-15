@@ -18,6 +18,7 @@ import (
 	"github.com/go-crm/services/internal/contacts"
 	"github.com/go-crm/services/internal/dashboard"
 	"github.com/go-crm/services/internal/deals"
+	"github.com/go-crm/services/internal/dealtasks"
 	"github.com/go-crm/services/internal/delivery"
 	"github.com/go-crm/services/internal/followups"
 	"github.com/go-crm/services/internal/integrations"
@@ -91,6 +92,7 @@ func main() {
 	r.Mount("/api/v1/dashboard", dashboard.NewHandler(pool, cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/notifications", notify.NewHandler(notifier.Store(), cfg.JWTSecret).Routes())
 	r.Mount("/api/v1/actions", followups.NewHandler(pool, cfg.JWTSecret).Routes())
+	r.Mount("/api/v1/deal-tasks", dealtasks.NewHandler(pool, cfg.JWTSecret).Routes())
 
 	srv := &http.Server{
 		Addr:              cfg.GatewayAddr,
