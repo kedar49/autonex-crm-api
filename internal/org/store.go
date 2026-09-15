@@ -28,6 +28,7 @@ type Member struct {
 	Email        string    `json:"email"`
 	Name         *string   `json:"name"`
 	AuthProvider string    `json:"authProvider"`
+	Role         string    `json:"role"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
@@ -83,8 +84,10 @@ func (s *store) updateWorkspace(ctx context.Context, orgID string, name, currenc
 
 func (s *store) members(ctx context.Context, orgID string) ([]Member, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id::text, email, name, auth_provider, created_at
-		 FROM users WHERE org_id = $1 ORDER BY created_at`, orgID)
+		`SELECT u.id::text, u.email, u.name, u.auth_provider, coalesce(p.role, 'sales'), u.created_at
+		 FROM users u
+		 LEFT JOIN profiles p ON p.id = u.id
+		 WHERE u.org_id = $1 ORDER BY u.created_at`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +96,7 @@ func (s *store) members(ctx context.Context, orgID string) ([]Member, error) {
 	out := make([]Member, 0, 8)
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.AuthProvider, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.AuthProvider, &m.Role, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -165,7 +168,20 @@ type acceptedUser struct {
 	ID    string
 	Email string
 	OrgID string
+	Role  string
 }
+
+// Role-change failures the handler turns into 4xx answers rather than 500s.
+var (
+	// ErrMemberNotFound means the member doesn't exist in the organization.
+	ErrMemberNotFound = errors.New("member not found")
+	// ErrSelfRoleChange guards against an admin promoting themselves.
+	ErrSelfRoleChange = errors.New("you cannot change your own role")
+	// ErrOwnerOnly means the change needs owner rights the caller lacks.
+	ErrOwnerOnly = errors.New("only an owner can do that")
+	// ErrLastOwner means the change would leave the org with no owner.
+	ErrLastOwner = errors.New("the organisation must keep at least one owner")
+)
 
 // acceptInvitation consumes a valid invitation and creates its user, atomically.
 //
@@ -207,10 +223,92 @@ func (s *store) acceptInvitation(ctx context.Context, tokenHash, name, passwordH
 		return acceptedUser{}, err
 	}
 
+	fullName := name
+	if fullName == "" {
+		fullName = email
+	}
+	const role = "sales"
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO profiles (id, full_name, role)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name`,
+		userID, fullName, role,
+	); err != nil {
+		return acceptedUser{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return acceptedUser{}, err
 	}
-	return acceptedUser{ID: userID, Email: email, OrgID: orgID}, nil
+	return acceptedUser{ID: userID, Email: email, OrgID: orgID, Role: role}, nil
+}
+
+// updateMemberRole writes a member's profile role. Reading the current role,
+// counting the org's owners and writing the new role all share one transaction
+// so two concurrent demotions can't race past the last-owner check.
+func (s *store) updateMemberRole(ctx context.Context, orgID, actorRole, memberID, role string) (Member, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Member{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var current string
+	err = tx.QueryRow(ctx,
+		`SELECT coalesce(p.role, 'sales')
+		 FROM users u
+		 LEFT JOIN profiles p ON p.id = u.id
+		 WHERE u.org_id = $1::uuid AND u.id = $2::uuid
+		 FOR UPDATE OF u`,
+		orgID, memberID).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
+		return Member{}, ErrMemberNotFound
+	}
+	if err != nil {
+		return Member{}, err
+	}
+
+	// Unseating an owner is an owner's prerogative, not an admin's.
+	if current == "owner" && actorRole != "owner" {
+		return Member{}, ErrOwnerOnly
+	}
+	if current == "owner" && role != "owner" {
+		var owners int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM users u
+			 JOIN profiles p ON p.id = u.id
+			 WHERE u.org_id = $1::uuid AND p.role = 'owner'`, orgID).Scan(&owners); err != nil {
+			return Member{}, err
+		}
+		if owners <= 1 {
+			return Member{}, ErrLastOwner
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO profiles (id, full_name, role)
+		 SELECT u.id, coalesce(u.name, split_part(u.email, '@', 1)), $3
+		 FROM users u WHERE u.id = $2::uuid AND u.org_id = $1::uuid
+		 ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
+		orgID, memberID, role,
+	); err != nil {
+		return Member{}, err
+	}
+
+	var m Member
+	if err := tx.QueryRow(ctx,
+		`SELECT u.id::text, u.email, u.name, u.auth_provider, coalesce(p.role, 'sales'), u.created_at
+		 FROM users u
+		 LEFT JOIN profiles p ON p.id = u.id
+		 WHERE u.org_id = $1::uuid AND u.id = $2::uuid`, orgID, memberID,
+	).Scan(&m.ID, &m.Email, &m.Name, &m.AuthProvider, &m.Role, &m.CreatedAt); err != nil {
+		return Member{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Member{}, err
+	}
+	return m, nil
 }
 
 func nilIfEmpty(s string) *string {

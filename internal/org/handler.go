@@ -36,6 +36,10 @@ func (h *Handler) Routes() chi.Router {
 		pr.Get("/", h.workspace)
 		pr.Patch("/", h.updateWorkspace)
 		pr.Get("/members", h.members)
+		pr.Group(func(adminRouter chi.Router) {
+			adminRouter.Use(middleware.RequireRole("owner", "admin"))
+			adminRouter.Patch("/members/{id}/role", h.updateMemberRole)
+		})
 		pr.Get("/invitations", h.invitations)
 		pr.Post("/invitations", h.invite)
 		pr.Delete("/invitations/{id}", h.revoke)
@@ -134,10 +138,35 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusCreated, session)
 }
 
+func (h *Handler) updateMemberRole(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Role string `json:"role"`
+	}
+	if !httpx.DecodeJSON(w, r, &in) {
+		return
+	}
+	ctx := r.Context()
+	m, err := h.svc.UpdateMemberRole(ctx, middleware.OrgID(ctx), middleware.UserID(ctx),
+		middleware.Role(ctx), chi.URLParam(r, "id"), in.Role)
+	if err != nil {
+		writeErr(w, err, "could not update member role")
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, m)
+}
+
 func writeErr(w http.ResponseWriter, err error, fallback string) {
 	httpx.WriteDomainError(w, err, fallback,
 		httpx.Rule{Err: ErrNotFound, Status: http.StatusNotFound,
 			Message: "invitation not found"},
+		httpx.Rule{Err: ErrMemberNotFound, Status: http.StatusNotFound,
+			Message: "member not found"},
+		httpx.Rule{Err: ErrSelfRoleChange, Status: http.StatusForbidden,
+			Message: "you cannot change your own role"},
+		httpx.Rule{Err: ErrOwnerOnly, Status: http.StatusForbidden,
+			Message: "only an owner can change an owner's role"},
+		httpx.Rule{Err: ErrLastOwner, Status: http.StatusConflict,
+			Message: "the workspace must keep at least one owner"},
 		httpx.Rule{Err: ErrAlreadyMember, Status: http.StatusConflict,
 			Message: "that email already belongs to an account"},
 		httpx.Rule{Err: ErrAlreadyInvited, Status: http.StatusConflict,
