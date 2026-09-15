@@ -18,7 +18,9 @@ ALTER TABLE follow_ups ADD COLUMN IF NOT EXISTS lead_id UUID REFERENCES leads(id
 ALTER TABLE follow_ups ADD COLUMN IF NOT EXISTS deal_id UUID REFERENCES deals(id) ON DELETE SET NULL;
 ALTER TABLE follow_ups ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 
--- 3. Relax dormant reminder sequence columns that were NOT NULL in legacy schema
+-- 3. Make sure the dormant reminder-sequence columns are nullable. 000001_init
+--    already declares them so; these are defensive no-ops for any database that
+--    tightened them by hand.
 ALTER TABLE follow_ups ALTER COLUMN invoice_id DROP NOT NULL;
 ALTER TABLE follow_ups ALTER COLUMN scheduled_for DROP NOT NULL;
 ALTER TABLE follow_ups ALTER COLUMN channel DROP NOT NULL;

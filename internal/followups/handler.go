@@ -174,6 +174,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 			Message: "unknown account"},
 		httpx.Rule{Err: ErrLeadNotFound, Status: http.StatusBadRequest,
 			Message: "unknown lead"},
+		httpx.Rule{Err: ErrLeadAccountMismatch, Status: http.StatusBadRequest,
+			Message: "that lead belongs to a different client"},
 		httpx.Rule{Err: ErrAssigneeNotFound, Status: http.StatusBadRequest,
 			Message: "unknown assignee"},
 	)

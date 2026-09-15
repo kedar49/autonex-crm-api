@@ -29,6 +29,11 @@ var (
 	// ErrLeadNotFound means the referenced lead is missing or belongs to
 	// another org.
 	ErrLeadNotFound = errors.New("lead not found")
+
+	// ErrLeadAccountMismatch means the action pairs a lead with an account the
+	// lead does not belong to. The dialog can't produce this, but a direct API
+	// call can, and it would file the action under the wrong client.
+	ErrLeadAccountMismatch = errors.New("lead belongs to a different account")
 )
 
 // Action is one row of the Actions dashboard.
@@ -56,12 +61,12 @@ const actionColumns = `id::text, title, due_at, status, assigned_to::text, accou
 // Filter narrows the org's action list; every field is optional (a zero value
 // means "no opinion"), and an empty filter returns the org's whole list.
 type Filter struct {
-	AccountID   string
-	LeadID      string
-	Status      string
-	AssignedTo  string
-	DueBefore   *time.Time
-	DueAfter    *time.Time
+	AccountID  string
+	LeadID     string
+	Status     string
+	AssignedTo string
+	DueBefore  *time.Time
+	DueAfter   *time.Time
 	// ExcludeDone drops completed actions. It is independent of Status so the
 	// dashboard can ask for "everything still outstanding" in one query.
 	ExcludeDone bool
@@ -163,19 +168,21 @@ func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool
 	return exists, nil
 }
 
-// leadInOrg reports whether leadID names a lead in orgID.
-func (s *store) leadInOrg(ctx context.Context, orgID, leadID string) (bool, error) {
-	var exists bool
-	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM leads WHERE org_id = $1 AND id = $2)`,
-		orgID, leadID).Scan(&exists)
-	if err != nil {
-		if database.IsInvalidTextRepr(err) {
-			return false, nil
-		}
-		return false, err
+// leadAccount looks up a lead in orgID and reports the account it belongs to,
+// so the caller can check that an action doesn't pair the two inconsistently.
+// found is false when the lead is missing or lives in another org; account is
+// nil when the lead exists but isn't attached to a client yet.
+func (s *store) leadAccount(ctx context.Context, orgID, leadID string) (account *string, found bool, err error) {
+	err = s.pool.QueryRow(ctx,
+		`SELECT account_id::text FROM leads WHERE org_id = $1 AND id = $2`,
+		orgID, leadID).Scan(&account)
+	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
+		return nil, false, nil
 	}
-	return exists, nil
+	if err != nil {
+		return nil, false, err
+	}
+	return account, true, nil
 }
 
 // assigneeInOrg reports whether userID names a user with a profile in orgID.

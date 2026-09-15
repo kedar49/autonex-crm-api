@@ -100,12 +100,18 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input, requireSt
 		}
 	}
 	if in.LeadID != nil {
-		ok, err := s.store.leadInOrg(ctx, orgID, *in.LeadID)
+		leadAccount, ok, err := s.store.leadAccount(ctx, orgID, *in.LeadID)
 		if err != nil {
 			return Input{}, err
 		}
 		if !ok {
 			return Input{}, ErrLeadNotFound
+		}
+		// A lead sits with at most one client, so an action naming both must
+		// name the same one. The dialog clears the lead when the account
+		// changes; this is the same rule for callers that skip the UI.
+		if in.AccountID != nil && leadAccount != nil && *leadAccount != *in.AccountID {
+			return Input{}, ErrLeadAccountMismatch
 		}
 	}
 	if in.AssignedTo != nil {
