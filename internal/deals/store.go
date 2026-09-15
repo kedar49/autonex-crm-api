@@ -34,6 +34,9 @@ type Deal struct {
 	ContactID   *string `json:"contactId"`
 	ContactName *string `json:"contactName"`
 	AccountID   *string `json:"accountId"`
+	// The client's name, denormalized so a card can fall back to it when the
+	// deal has no title of its own.
+	AccountName *string `json:"accountName"`
 	// The lead this deal was converted from. Read and written: it used to be set
 	// on create and never selected or updated, so the edit form showed it empty
 	// and saving silently dropped the link.
@@ -76,6 +79,7 @@ const dealColumns = `
 	d.primary_contact_id::text AS contact_id,
 	NULLIF(concat_ws(' ', c.first_name, c.last_name), ''),
 	d.account_id::text         AS account_id,
+	a.name                     AS account_name,
 	d.lead_id::text            AS lead_id,
 	l.contact_name             AS lead_name,
 	d.total_cameras, d.location, d.products,
@@ -87,7 +91,8 @@ const dealFrom = `
 	FROM deals d
 	LEFT JOIN profiles p ON p.id = d.owner_id
 	LEFT JOIN contacts c ON c.id = d.primary_contact_id
-	LEFT JOIN leads    l ON l.id = d.lead_id `
+	LEFT JOIN leads    l ON l.id = d.lead_id
+	LEFT JOIN accounts a ON a.id = d.account_id `
 
 func (s *store) board(ctx context.Context, _ string, limit int) ([]Deal, error) {
 	rows, err := s.pool.Query(ctx,
@@ -355,7 +360,7 @@ func scanDeal(row rowScanner) (Deal, error) {
 		&d.ID, &d.Title, &d.Description, &d.Amount, &d.Stage,
 		&d.OwnerUserID, &d.OwnerName, &d.OwnerEmail,
 		&d.ContactID, &d.ContactName,
-		&d.AccountID, &d.LeadID, &d.LeadName, &d.TotalCameras, &d.Location, &d.Products,
+		&d.AccountID, &d.AccountName, &d.LeadID, &d.LeadName, &d.TotalCameras, &d.Location, &d.Products,
 		&d.ExpectedCloseDate, &d.Position, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return Deal{}, translate(err)

@@ -29,6 +29,7 @@ type Input struct {
 	AssignedTo *string   `json:"assignedTo"`
 	AccountID  *string   `json:"accountId"`
 	LeadID     *string   `json:"leadId"`
+	DealID     *string   `json:"dealId"`
 	Status     string    `json:"status"`
 }
 
@@ -114,6 +115,15 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input, requireSt
 			return Input{}, ErrLeadAccountMismatch
 		}
 	}
+	if in.DealID != nil {
+		ok, err := s.store.dealExists(ctx, *in.DealID)
+		if err != nil {
+			return Input{}, err
+		}
+		if !ok {
+			return Input{}, ErrDealNotFound
+		}
+	}
 	if in.AssignedTo != nil {
 		ok, err := s.store.assigneeInOrg(ctx, orgID, *in.AssignedTo)
 		if err != nil {
@@ -131,6 +141,7 @@ func normalize(in Input) Input {
 	in.AssignedTo = trimmedOrNil(in.AssignedTo)
 	in.AccountID = trimmedOrNil(in.AccountID)
 	in.LeadID = trimmedOrNil(in.LeadID)
+	in.DealID = trimmedOrNil(in.DealID)
 	in.Status = strings.TrimSpace(in.Status)
 	return in
 }

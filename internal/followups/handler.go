@@ -85,6 +85,10 @@ func parseFilter(w http.ResponseWriter, r *http.Request) (Filter, bool) {
 		httpx.WriteError(w, http.StatusBadRequest, "assignedTo must be a UUID")
 		return Filter{}, false
 	}
+	if v := f.DealID; v != "" && !isUUID(v) {
+		httpx.WriteError(w, http.StatusBadRequest, "dealId must be a UUID")
+		return Filter{}, false
+	}
 	// excludeDone lets the dashboard's "active" views line up with their counts
 	// without asking for two statuses in one request.
 	if v := q.Get("excludeDone"); v != "" {
@@ -176,6 +180,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 			Message: "unknown lead"},
 		httpx.Rule{Err: ErrLeadAccountMismatch, Status: http.StatusBadRequest,
 			Message: "that lead belongs to a different client"},
+		httpx.Rule{Err: ErrDealNotFound, Status: http.StatusBadRequest,
+			Message: "unknown deal"},
 		httpx.Rule{Err: ErrAssigneeNotFound, Status: http.StatusBadRequest,
 			Message: "unknown assignee"},
 	)
