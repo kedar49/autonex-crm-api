@@ -22,6 +22,9 @@ type User struct {
 	PasswordHash   *string `json:"-"`
 	AuthProvider   string  `json:"authProvider"`
 	ProviderUserID *string `json:"-"`
+	// Role is the profiles.role of this user, carried into the "role" JWT claim
+	// so RequireRole can gate a route without a DB lookup per request.
+	Role string `json:"role"`
 }
 
 // newUser is the input to createUserWithOrg — one shape for both the password and
@@ -43,17 +46,24 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
-const userColumns = `id::text, email, name, org_id::text, password_hash, auth_provider, provider_user_id`
+const userColumns = `id::text, email, name, org_id::text, password_hash, auth_provider, provider_user_id, ''::text AS role`
+
+// userColumnsWithRole joins in the profiles table so a lookup by email/id/provider
+// comes back with the caller's current role — RequireRole reads it from the JWT
+// claim this populates, not from a fresh DB read per request.
+const userColumnsWithRole = `u.id::text, u.email, u.name, u.org_id::text, u.password_hash, u.auth_provider, u.provider_user_id, coalesce(p.role, '') AS role`
+
+const userFromWithRole = `FROM users u LEFT JOIN profiles p ON p.id = u.id`
 
 func (s *store) userByEmail(ctx context.Context, email string) (User, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+userColumns+` FROM users WHERE email = $1`, email)
+		`SELECT `+userColumnsWithRole+` `+userFromWithRole+` WHERE u.email = $1`, email)
 	return scanUser(row)
 }
 
 func (s *store) userByProvider(ctx context.Context, provider, providerUserID string) (User, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+userColumns+` FROM users WHERE auth_provider = $1 AND provider_user_id = $2`,
+		`SELECT `+userColumnsWithRole+` `+userFromWithRole+` WHERE u.auth_provider = $1 AND u.provider_user_id = $2`,
 		provider, providerUserID)
 	return scanUser(row)
 }
@@ -108,11 +118,12 @@ func (s *store) createUserInOrg(ctx context.Context, orgID string, in newUser) (
 		fullName = *in.Name
 	}
 	// A joiner is not the owner of a workspace that already has one.
+	const role = "sales"
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO profiles (id, full_name, role)
 		 VALUES ($1, $2, $3)
 		 ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name`,
-		u.ID, fullName, "sales",
+		u.ID, fullName, role,
 	); err != nil {
 		return User{}, err
 	}
@@ -120,6 +131,7 @@ func (s *store) createUserInOrg(ctx context.Context, orgID string, in newUser) (
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
 	}
+	u.Role = role
 	return u, nil
 }
 
@@ -152,11 +164,12 @@ func (s *store) createUserWithOrg(ctx context.Context, in newUser) (User, error)
 	if in.Name != nil && *in.Name != "" {
 		fullName = *in.Name
 	}
+	const role = "owner"
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO profiles (id, full_name, role)
 		 VALUES ($1, $2, $3)
 		 ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name`,
-		u.ID, fullName, "owner",
+		u.ID, fullName, role,
 	); err != nil {
 		return User{}, err
 	}
@@ -164,11 +177,13 @@ func (s *store) createUserWithOrg(ctx context.Context, in newUser) (User, error)
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, err
 	}
+	u.Role = role
 	return u, nil
 }
 
 func (s *store) userByID(ctx context.Context, id string) (User, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id)
+	row := s.pool.QueryRow(ctx,
+		`SELECT `+userColumnsWithRole+` `+userFromWithRole+` WHERE u.id = $1`, id)
 	return scanUser(row)
 }
 
@@ -249,7 +264,7 @@ func (s *store) revokeAllRefreshTokens(ctx context.Context, userID string) error
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.OrgID, &u.PasswordHash, &u.AuthProvider, &u.ProviderUserID)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.OrgID, &u.PasswordHash, &u.AuthProvider, &u.ProviderUserID, &u.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrUserNotFound
 	}

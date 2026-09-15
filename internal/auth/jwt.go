@@ -30,6 +30,7 @@ func issueAccessToken(cfg config.Config, u User) (string, error) {
 		"sub":   u.ID,
 		"email": u.Email,
 		"org":   u.OrgID,
+		"role":  u.Role,
 		"iss":   cfg.JWTIssuer,
 		"iat":   now.Unix(),
 		"exp":   now.Add(cfg.JWTAccessTTL).Unix(),

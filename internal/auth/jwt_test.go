@@ -16,7 +16,7 @@ func TestIssueAccessToken(t *testing.T) {
 		JWTAccessTTL: time.Minute,
 	}
 
-	tok, err := issueAccessToken(cfg, User{ID: "user-123", Email: "a@b.com", OrgID: "org-789"})
+	tok, err := issueAccessToken(cfg, User{ID: "user-123", Email: "a@b.com", OrgID: "org-789", Role: "admin"})
 	if err != nil {
 		t.Fatalf("issueAccessToken: %v", err)
 	}
@@ -41,6 +41,11 @@ func TestIssueAccessToken(t *testing.T) {
 	claims, _ := parsed.Claims.(jwt.MapClaims)
 	if org, _ := claims["org"].(string); org != "org-789" {
 		t.Fatalf("org claim = %q, want org-789", org)
+	}
+	// RequireRole reads this claim rather than hitting the DB per request, so
+	// its absence would silently deny every role-gated route.
+	if role, _ := claims["role"].(string); role != "admin" {
+		t.Fatalf("role claim = %q, want admin", role)
 	}
 }
 
