@@ -153,12 +153,16 @@ func (s *store) complete(ctx context.Context, orgID, id string) (Action, error) 
 	return scanAction(row)
 }
 
-// accountInOrg reports whether accountID names an account in orgID.
-func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool, error) {
+// accountExists reports whether accountID names a live account.
+//
+// accounts carries no org_id — no module in this codebase scopes clients or
+// leads by organisation, only the rows this module owns — so existence plus the
+// soft-delete flag is the same check the accounts module itself makes.
+func (s *store) accountExists(ctx context.Context, accountID string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM accounts WHERE org_id = $1 AND id = $2)`,
-		orgID, accountID).Scan(&exists)
+		`SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND deleted_at IS NULL)`,
+		accountID).Scan(&exists)
 	if err != nil {
 		if database.IsInvalidTextRepr(err) {
 			return false, nil // malformed id can't name an account
@@ -168,14 +172,15 @@ func (s *store) accountInOrg(ctx context.Context, orgID, accountID string) (bool
 	return exists, nil
 }
 
-// leadAccount looks up a lead in orgID and reports the account it belongs to,
-// so the caller can check that an action doesn't pair the two inconsistently.
-// found is false when the lead is missing or lives in another org; account is
-// nil when the lead exists but isn't attached to a client yet.
-func (s *store) leadAccount(ctx context.Context, orgID, leadID string) (account *string, found bool, err error) {
+// leadAccount looks up a live lead and reports the account it belongs to, so
+// the caller can check that an action doesn't pair the two inconsistently.
+// found is false when the lead is missing or deleted; account is nil when the
+// lead exists but isn't attached to a client yet. Like accounts, leads carry no
+// org_id to scope by.
+func (s *store) leadAccount(ctx context.Context, leadID string) (account *string, found bool, err error) {
 	err = s.pool.QueryRow(ctx,
-		`SELECT account_id::text FROM leads WHERE org_id = $1 AND id = $2`,
-		orgID, leadID).Scan(&account)
+		`SELECT account_id::text FROM leads WHERE id = $1 AND deleted_at IS NULL`,
+		leadID).Scan(&account)
 	if errors.Is(err, pgx.ErrNoRows) || database.IsInvalidTextRepr(err) {
 		return nil, false, nil
 	}
