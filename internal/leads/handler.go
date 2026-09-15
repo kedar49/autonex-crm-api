@@ -67,11 +67,17 @@ func (h *Handler) Routes() chi.Router {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := paging.Params(r)
+	if sort := q.Get("sort"); sort != "" && !ValidSort(sort) {
+		httpx.WriteError(w, http.StatusBadRequest,
+			"sort must be one of name, nameDesc, created, createdAsc, updated")
+		return
+	}
 
 	page, err := h.svc.List(r.Context(), middleware.OrgID(r.Context()), Query{
 		Filter:    q.Get("filter"),
 		Search:    q.Get("search"),
 		AccountID: q.Get("accountId"),
+		Sort:      q.Get("sort"),
 	}, limit, offset)
 	if err != nil {
 		writeErr(w, err, "could not list leads")

@@ -114,6 +114,9 @@ type Query struct {
 	Filter    string
 	Search    string
 	AccountID string
+	// Sort is one of the store's known keys; anything else falls back to the
+	// urgency order the list defaults to.
+	Sort string
 }
 
 // List returns one org-scoped page, sorted by urgency.

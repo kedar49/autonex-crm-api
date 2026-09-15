@@ -165,9 +165,37 @@ const filterClause = `
 	  -- failed cast, which is what a stale picker would otherwise send.
 	  AND ($3 = '' OR l.account_id::text = $3)`
 
+// sortOrders maps a caller's sort key to a fixed ORDER BY clause. The clauses
+// are constants chosen by key, never interpolated from the request, so the sort
+// parameter cannot reach the query as SQL. An unknown key falls back to urgency,
+// which is the list's documented default.
+var sortOrders = map[string]string{
+	// leads has no first_name/last_name of its own — leadColumns aliases
+	// contact_name into them — so the sort has to name the real columns, falling
+	// back to the company the lead sits under when the contact is blank.
+	"name":       ` ORDER BY lower(coalesce(nullif(trim(l.contact_name), ''), c.name, l.title, '')) ASC, l.id`,
+	"nameDesc":   ` ORDER BY lower(coalesce(nullif(trim(l.contact_name), ''), c.name, l.title, '')) DESC, l.id`,
+	"created":    ` ORDER BY l.created_at DESC, l.id`,
+	"createdAsc": ` ORDER BY l.created_at ASC, l.id`,
+	"updated":    ` ORDER BY l.updated_at DESC, l.id`,
+}
+
+// ValidSort reports whether a sort key is one the store knows.
+func ValidSort(key string) bool {
+	_, ok := sortOrders[key]
+	return ok
+}
+
+func orderFor(key string) string {
+	if clause, ok := sortOrders[key]; ok {
+		return clause
+	}
+	return urgencyOrder
+}
+
 func (s *store) list(ctx context.Context, _ string, q Query, limit, offset int) ([]Lead, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+leadColumns+leadFrom+filterClause+urgencyOrder+`
+		`SELECT `+leadColumns+leadFrom+filterClause+orderFor(q.Sort)+`
 		 LIMIT $4 OFFSET $5`, q.Filter, searchTerm(q.Search), q.AccountID, limit, offset)
 	if err != nil {
 		return nil, translate(err)

@@ -90,10 +90,35 @@ const searchClause = `
 	       position($1 in lower(coalesce(a.domain, '')))    > 0 OR
 	       position($1 in lower(coalesce(a.industry, '')))  > 0)`
 
-func (s *store) list(ctx context.Context, _ string, search string, limit, offset int) ([]Account, error) {
+// sortOrders maps a caller's sort key to a fixed ORDER BY clause. The clauses
+// are constants selected by key rather than text interpolated from the request,
+// so the sort parameter can never reach the query as SQL.
+var sortOrders = map[string]string{
+	"name":       ` ORDER BY lower(a.name) ASC, a.id`,
+	"nameDesc":   ` ORDER BY lower(a.name) DESC, a.id`,
+	"created":    ` ORDER BY a.created_at DESC, a.id`,
+	"createdAsc": ` ORDER BY a.created_at ASC, a.id`,
+	"updated":    ` ORDER BY a.updated_at DESC, a.id`,
+}
+
+const defaultOrder = ` ORDER BY a.created_at DESC, a.id`
+
+// ValidSort reports whether a sort key is one the store knows.
+func ValidSort(key string) bool {
+	_, ok := sortOrders[key]
+	return ok
+}
+
+func orderFor(key string) string {
+	if clause, ok := sortOrders[key]; ok {
+		return clause
+	}
+	return defaultOrder
+}
+
+func (s *store) list(ctx context.Context, _ string, search, sort string, limit, offset int) ([]Account, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+accountColumns+accountFrom+searchClause+
-			` ORDER BY a.created_at DESC, a.id
+		`SELECT `+accountColumns+accountFrom+searchClause+orderFor(sort)+`
 			 LIMIT $2 OFFSET $3`, search, limit, offset)
 	if err != nil {
 		return nil, err

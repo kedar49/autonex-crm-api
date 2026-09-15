@@ -43,12 +43,13 @@ func newService(pool *pgxpool.Pool) *Service {
 	return &Service{store: &store{pool: pool}}
 }
 
-// List returns one org-scoped page of accounts, newest first.
-func (s *Service) List(ctx context.Context, orgID, search string, limit, offset int) (Page, error) {
+// List returns one org-scoped page of accounts. sort picks the order; an empty
+// or unknown key means newest first, which is what the list has always done.
+func (s *Service) List(ctx context.Context, orgID, search, sort string, limit, offset int) (Page, error) {
 	limit, offset = clampPage(limit, offset)
 	search = strings.ToLower(strings.TrimSpace(search))
 
-	items, err := s.store.list(ctx, orgID, search, limit, offset)
+	items, err := s.store.list(ctx, orgID, search, sort, limit, offset)
 	if err != nil {
 		return Page{}, err
 	}
