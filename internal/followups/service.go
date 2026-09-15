@@ -91,7 +91,7 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input, requireSt
 	}
 
 	if in.AccountID != nil {
-		ok, err := s.store.accountInOrg(ctx, orgID, *in.AccountID)
+		ok, err := s.store.accountExists(ctx, *in.AccountID)
 		if err != nil {
 			return Input{}, err
 		}
@@ -100,7 +100,7 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input, requireSt
 		}
 	}
 	if in.LeadID != nil {
-		leadAccount, ok, err := s.store.leadAccount(ctx, orgID, *in.LeadID)
+		leadAccount, ok, err := s.store.leadAccount(ctx, *in.LeadID)
 		if err != nil {
 			return Input{}, err
 		}
