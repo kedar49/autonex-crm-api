@@ -183,7 +183,7 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 		httpx.Rule{Err: ErrDealNotFound, Status: http.StatusBadRequest,
 			Message: "unknown deal"},
 		httpx.Rule{Err: ErrAssigneeNotFound, Status: http.StatusBadRequest,
-			Message: "unknown assignee"},
+			Message: "that assignee is not a member of your workspace"},
 	)
 }
 
