@@ -116,8 +116,12 @@ func TestParseRejectsSheetWithoutHeader(t *testing.T) {
 	}
 }
 
-// One unreadable cell must cost one row, not the whole upload.
-func TestParseReportsBadRowsWithoutFailingTheSheet(t *testing.T) {
+// An unreadable cell costs that cell, not the row it is in and not the upload.
+//
+// Borax Mills is a client whether or not anyone typed a number in its camera
+// column. Dropping the line used to take the client, the location and the
+// contact with it, over one word.
+func TestParseReportsBadCellsWithoutLosingTheRow(t *testing.T) {
 	rows, _, errs := parseCSVString(t, strings.Join([]string{
 		"Client,Total Cameras",
 		"Acme Steel,24",
@@ -125,14 +129,68 @@ func TestParseReportsBadRowsWithoutFailingTheSheet(t *testing.T) {
 		"Cinder Co,8",
 	}, "\n"))
 
-	if len(rows) != 2 {
-		t.Fatalf("parsed %d rows, want 2 good ones", len(rows))
+	if len(rows) != 3 {
+		t.Fatalf("parsed %d rows, want all 3", len(rows))
+	}
+	if rows[1].values.Client != "Borax Mills" {
+		t.Errorf("row 2 client = %q, want the row kept", rows[1].values.Client)
+	}
+	if rows[1].values.TotalCameras != nil {
+		t.Errorf("camera count = %v, want it left blank", *rows[1].values.TotalCameras)
 	}
 	if len(errs) != 1 {
 		t.Fatalf("errors = %v, want exactly one", errs)
 	}
 	if !strings.Contains(errs[0], "row 3") {
 		t.Errorf("error %q should name the offending sheet row", errs[0])
+	}
+}
+
+// The date spellings a hand-maintained operations sheet actually contains.
+// Every one of these used to lose its entire row.
+func TestParseSheetDateTolerance(t *testing.T) {
+	want := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	for _, v := range []string{
+		"2026-09-17", "2026/09/17", "17/09/2026", "17-09-2026", "17/9/2026",
+		"17 Sep 2026", "17 Sept 2026", "17 September 2026", "Sept 17, 2026",
+		"17-Sep-26", "17-Sep-2026", "17.09.2026", "17/09/26", "17/9/26",
+		"17th September 2026", "Wed 17 Sep 2026", "17 sep 2026",
+		"2026-09-17T00:00:00Z", "09/17/2026",
+	} {
+		got, err := parseSheetDate(v)
+		if err != nil {
+			t.Errorf("parseSheetDate(%q) failed: %v", v, err)
+			continue
+		}
+		if !got.Equal(want) {
+			t.Errorf("parseSheetDate(%q) = %s, want %s", v, got.Format("2006-01-02"), want.Format("2006-01-02"))
+		}
+	}
+}
+
+// A month with no day is a real commitment to that month, so it lands on the
+// first of it rather than being thrown away.
+func TestParseSheetDateMonthOnly(t *testing.T) {
+	want := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for _, v := range []string{"Sep 2026", "Sept 2026", "September 2026", "Sep-26", "2026-09"} {
+		got, err := parseSheetDate(v)
+		if err != nil {
+			t.Errorf("parseSheetDate(%q) failed: %v", v, err)
+			continue
+		}
+		if !got.Equal(want) {
+			t.Errorf("parseSheetDate(%q) = %s, want %s", v, got.Format("2006-01-02"), want.Format("2006-01-02"))
+		}
+	}
+}
+
+// Still an error: a date column is not a notes column, and guessing at these
+// would put a fabricated date in front of someone planning an installation.
+func TestParseSheetDateRejectsNonDates(t *testing.T) {
+	for _, v := range []string{"TBD", "next quarter", "asap", "12", "", "-"} {
+		if got, err := parseSheetDate(v); err == nil {
+			t.Errorf("parseSheetDate(%q) = %s, want an error", v, got)
+		}
 	}
 }
 

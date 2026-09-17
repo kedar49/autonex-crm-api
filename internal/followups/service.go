@@ -12,6 +12,20 @@ import (
 // Statuses is the canonical order an action's status can be in.
 var Statuses = []string{"open", "in_progress", "done"}
 
+// Priorities is the canonical order an action's priority can be in, matching a
+// deal task's. The two lists sit side by side in a deal's working view, so one
+// vocabulary and one set of colours serve both.
+var Priorities = []string{"high", "medium", "normal"}
+
+func validPriority(p string) bool {
+	for _, v := range Priorities {
+		if v == p {
+			return true
+		}
+	}
+	return false
+}
+
 func validStatus(s string) bool {
 	for _, v := range Statuses {
 		if v == s {
@@ -31,6 +45,9 @@ type Input struct {
 	LeadID     *string   `json:"leadId"`
 	DealID     *string   `json:"dealId"`
 	Status     string    `json:"status"`
+	// Priority defaults to "normal" when a caller omits it, so an older client
+	// that has never heard of the field keeps working.
+	Priority string `json:"priority"`
 }
 
 // Service holds the Actions business logic.
@@ -143,6 +160,10 @@ func normalize(in Input) Input {
 	in.LeadID = trimmedOrNil(in.LeadID)
 	in.DealID = trimmedOrNil(in.DealID)
 	in.Status = strings.TrimSpace(in.Status)
+	in.Priority = strings.TrimSpace(in.Priority)
+	if in.Priority == "" {
+		in.Priority = "normal"
+	}
 	return in
 }
 
@@ -169,6 +190,9 @@ func validate(in Input, requireStatus bool) error {
 	}
 	if requireStatus && !validStatus(in.Status) {
 		return apperr.Invalid("status must be one of open, in_progress, done")
+	}
+	if !validPriority(in.Priority) {
+		return apperr.Invalid("priority must be one of high, medium, normal")
 	}
 	return nil
 }

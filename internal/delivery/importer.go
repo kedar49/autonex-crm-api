@@ -6,9 +6,11 @@ import (
 	"encoding/csv"
 	"errors"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-crm/services/pkg/apperr"
 	"github.com/xuri/excelize/v2"
@@ -121,17 +123,60 @@ var headerAliases = map[string]string{
 // dateLayouts are the spellings a date arrives in when the sheet stored it as
 // text. Day-first before month-first: this tracker is maintained in India, where
 // 03/04 means 3 April.
+//
+// The list is long because a shared operations sheet is typed by hand by a
+// dozen people over a couple of years, and every one of these is a real way
+// somebody wrote a date in it. Anything missing here used to cost the whole
+// row, not just the date — see rowFromCells.
 var dateLayouts = []string{
 	"2006-01-02",
+	"2006/01/02",
 	"02/01/2006",
 	"02-01-2006",
 	"2/1/2006",
+	"2-1-2006",
+	// Two-digit years. Go reads "26" as 2026, which is what a sheet means.
+	"02/01/06",
+	"02-01-06",
+	"2/1/06",
+	"2-1-06",
+	// Month-first, for the rows pasted out of an American tool.
 	"01/02/2006",
+	// Named months, with and without a day, long and short.
 	"02 Jan 2006",
 	"2 Jan 2006",
+	"02 January 2006",
+	"2 January 2006",
 	"Jan 2, 2006",
+	"January 2, 2006",
+	"Jan 2 2006",
+	"January 2 2006",
 	"02-Jan-2006",
-	"2006/01/02",
+	"2-Jan-2006",
+	"02-Jan-06",
+	"2-Jan-06",
+	"02 Jan 06",
+	"2 Jan 06",
+	// Timestamps, from a CSV a database exported.
+	time.RFC3339,
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05",
+}
+
+// monthOnlyLayouts carry a month but no day. A cell reading "Sept 2026" is a
+// real commitment to a month, and the sheet it came from means the start of it;
+// dropping the date entirely because nobody named a day loses more than the
+// first-of-month convention costs.
+var monthOnlyLayouts = []string{
+	"Jan 2006",
+	"January 2006",
+	"Jan-2006",
+	"January-2006",
+	"Jan-06",
+	"January-06",
+	"Jan 06",
+	"2006-01",
+	"01/2006",
 }
 
 // ErrNoHeader means the file had no recognizable header row.
@@ -393,9 +438,12 @@ func parseXLSX(r io.Reader) ([]parsedRow, []string, []string, error) {
 			if allBlank(cells) {
 				continue
 			}
-			in, err := rowFromCells(cells, mapping)
+			in, warnings, err := rowFromCells(cells, mapping)
 			if err != nil {
 				continue
+			}
+			for _, w := range warnings {
+				errs = append(errs, "row "+strconv.Itoa(r+1)+": "+w)
 			}
 			in.Client = clientName
 			if in.Locations != nil && strings.EqualFold(strings.TrimSpace(*in.Locations), "tbd") {
@@ -472,10 +520,13 @@ func rowsFromGrid(grid [][]string) ([]parsedRow, []string, []string, error) {
 			continue // spacer line
 		}
 
-		in, err := rowFromCells(cells, mapping)
+		in, warnings, err := rowFromCells(cells, mapping)
 		if err != nil {
 			errs = append(errs, "row "+strconv.Itoa(i+1)+": "+err.Error())
 			continue
+		}
+		for _, w := range warnings {
+			errs = append(errs, "row "+strconv.Itoa(i+1)+": "+w)
 		}
 		rows = append(rows, parsedRow{sheetRow: i + 1, values: in})
 	}
@@ -527,8 +578,18 @@ func normalizeHeader(s string) string {
 	return b.String()
 }
 
-func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
+// rowFromCells reads one sheet line into an Input.
+//
+// It returns warnings alongside the row for the cells it could not read but
+// could do without. A date it cannot parse is the case that matters: the cell
+// used to fail the whole line, so one badly typed date meant the client, the
+// location, the camera count and the contact all went missing too — and the row
+// simply was not there after the import, with the reason buried in a list of
+// errors. The row now lands with everything else intact and the date left
+// empty, which is the same thing a blank date cell already means.
+func rowFromCells(cells []string, mapping map[int]string) (Input, []string, error) {
 	var in Input
+	var warnings []string
 	for col, field := range mapping {
 		if col >= len(cells) {
 			continue
@@ -564,7 +625,8 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 			}
 			n, err := parseCameraCount(value)
 			if err != nil {
-				return Input{}, err
+				warnings = append(warnings, "camera count "+strconv.Quote(value)+" was not a number, so it was left blank")
+				continue
 			}
 			in.TotalCameras = &n
 		case "implementationDate":
@@ -573,16 +635,19 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 			}
 			d, err := parseSheetDate(value)
 			if err != nil {
-				return Input{}, err
+				warnings = append(warnings, "date "+strconv.Quote(value)+" was not a date anyone could read, so it was left blank")
+				continue
 			}
 			parsed := NewDate(d)
 			in.ImplementationDate = &parsed
 		}
 	}
 	if hasField(mapping, "client") && strings.TrimSpace(in.Client) == "" {
-		return Input{}, errors.New("no client name")
+		// The one cell the row cannot do without: it is what the row is filed
+		// under, so there is nothing to keep.
+		return Input{}, nil, errors.New("no client name")
 	}
-	return in, nil
+	return in, warnings, nil
 }
 
 // parseCameraCount reads a count that may have arrived as "12", "12.0" (Excel
@@ -619,19 +684,87 @@ func parseCameraCount(v string) (int, error) {
 // common layouts, or the serial number Excel stores when the cell is formatted
 // as a date.
 func parseSheetDate(v string) (time.Time, error) {
-	for _, layout := range dateLayouts {
-		if t, err := time.Parse(layout, v); err == nil {
-			return t, nil
-		}
-	}
+	raw := strings.TrimSpace(v)
+
 	// An Excel serial: days since 1899-12-30. Bounded to a plausible range so a
 	// stray "12" in a date column reads as an error, not as January 1900.
-	if serial, err := strconv.ParseFloat(v, 64); err == nil && serial > 20000 && serial < 80000 {
+	if serial, err := strconv.ParseFloat(raw, 64); err == nil && serial > 20000 && serial < 80000 {
 		if t, err := excelize.ExcelDateToTime(serial, false); err == nil {
 			return t, nil
 		}
 	}
+
+	cleaned := cleanDateText(raw)
+	for _, layout := range dateLayouts {
+		if t, err := time.Parse(layout, cleaned); err == nil {
+			return t, nil
+		}
+	}
+	for _, layout := range monthOnlyLayouts {
+		if t, err := time.Parse(layout, cleaned); err == nil {
+			return t, nil
+		}
+	}
 	return time.Time{}, errors.New("could not read the date: " + v)
+}
+
+// ordinalSuffix matches the "th" in "9th Sept" — how a person writes a date and
+// how no date library parses one.
+var ordinalSuffix = regexp.MustCompile(`(?i)\b(\d{1,2})(st|nd|rd|th)\b`)
+
+// leadingWeekday matches the "Wed" in "Wed 17 Sep", which carries no
+// information the rest of the string does not.
+var leadingWeekday = regexp.MustCompile(`(?i)^(mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun)[a-z]*\.?[\s,]+`)
+
+// cleanDateText rewrites the ways people type a date into the ways Go parses
+// one, without changing which date is meant.
+//
+// None of these are exotic: "Sept" is the ordinary British abbreviation and Go
+// only knows "Sep"; a full stop is a perfectly normal separator outside
+// software; and an ordinal is simply how the date is spoken. Each one used to
+// cost the entire row.
+func cleanDateText(s string) string {
+	s = strings.TrimSpace(s)
+	s = leadingWeekday.ReplaceAllString(s, "")
+	s = ordinalSuffix.ReplaceAllString(s, "$1")
+
+	// "Sept" → "Sep". Done on word boundaries so "September" is left whole for
+	// the long-form layouts to read.
+	s = regexp.MustCompile(`(?i)\bsept\b`).ReplaceAllString(s, "Sep")
+
+	// A full stop between numbers is a separator, not a decimal point.
+	if dottedDate.MatchString(s) {
+		s = strings.ReplaceAll(s, ".", "/")
+	}
+
+	// Collapse any run of whitespace, so "17  Sep   2026" reads as one spacing.
+	s = strings.Join(strings.Fields(s), " ")
+
+	// Go matches month names case-sensitively in title case.
+	return titleCaseMonths(s)
+}
+
+var dottedDate = regexp.MustCompile(`^\d{1,4}\.\d{1,2}\.\d{2,4}$`)
+
+// titleCaseMonths upper-cases the first letter of each alphabetic run, which is
+// the only thing standing between "17 sep 2026" and a parsed date.
+func titleCaseMonths(s string) string {
+	out := []rune(s)
+	atWordStart := true
+	for i, r := range out {
+		isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if !isLetter {
+			atWordStart = true
+			continue
+		}
+		if atWordStart {
+			out[i] = unicode.ToUpper(r)
+		} else {
+			out[i] = unicode.ToLower(r)
+		}
+		atWordStart = false
+	}
+	return string(out)
 }
 
 // diff names the fields an import would change on an existing row, so the

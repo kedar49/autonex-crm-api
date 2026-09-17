@@ -8,12 +8,27 @@ import (
 )
 
 func TestValidate(t *testing.T) {
-	if err := validate(Input{Title: "Call Acme", DueAt: time.Now(), Status: "open"}, true); err != nil {
+	// validate runs after normalize, which is where the priority default is
+	// filled in — so it asserts the invariant rather than re-establishing it.
+	if err := validate(Input{Title: "Call Acme", DueAt: time.Now(), Status: "open",
+		Priority: "normal"}, true); err != nil {
 		t.Fatalf("minimal action rejected: %v", err)
 	}
 	// Create never requires a status.
-	if err := validate(Input{Title: "Call Acme", DueAt: time.Now()}, false); err != nil {
+	if err := validate(Input{Title: "Call Acme", DueAt: time.Now(), Priority: "high"}, false); err != nil {
 		t.Fatalf("create without status rejected: %v", err)
+	}
+}
+
+// A caller that has never heard of priority still gets a valid action: the
+// default is applied on the way in, not demanded of the client.
+func TestNormalizeDefaultsPriority(t *testing.T) {
+	in := normalize(Input{Title: "Call Acme", DueAt: time.Now(), Status: "open"})
+	if in.Priority != "normal" {
+		t.Fatalf("priority = %q, want \"normal\"", in.Priority)
+	}
+	if err := validate(in, true); err != nil {
+		t.Fatalf("normalized action rejected: %v", err)
 	}
 }
 
@@ -22,10 +37,14 @@ func TestValidateRejects(t *testing.T) {
 		in            Input
 		requireStatus bool
 	}{
-		"empty title":              {in: Input{DueAt: time.Now(), Status: "open"}, requireStatus: true},
-		"zero due date":            {in: Input{Title: "X", Status: "open"}, requireStatus: true},
-		"unknown status":           {in: Input{Title: "X", DueAt: time.Now(), Status: "pending"}, requireStatus: true},
-		"missing status on update": {in: Input{Title: "X", DueAt: time.Now()}, requireStatus: true},
+		"empty title":              {in: Input{DueAt: time.Now(), Status: "open", Priority: "normal"}, requireStatus: true},
+		"zero due date":            {in: Input{Title: "X", Status: "open", Priority: "normal"}, requireStatus: true},
+		"unknown status":           {in: Input{Title: "X", DueAt: time.Now(), Status: "pending", Priority: "normal"}, requireStatus: true},
+		"missing status on update": {in: Input{Title: "X", DueAt: time.Now(), Priority: "normal"}, requireStatus: true},
+		// The DB has a check constraint on this column, so an unvetted value
+		// would turn a 400 into a 500.
+		"unknown priority": {in: Input{Title: "X", DueAt: time.Now(), Status: "open", Priority: "urgent"},
+			requireStatus: true},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -37,6 +56,19 @@ func TestValidateRejects(t *testing.T) {
 				t.Errorf("error = %v, want an apperr.Validation", err)
 			}
 		})
+	}
+}
+
+func TestValidPriority(t *testing.T) {
+	for _, p := range Priorities {
+		if !validPriority(p) {
+			t.Errorf("validPriority(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"urgent", "low", "", "High"} {
+		if validPriority(p) {
+			t.Errorf("validPriority(%q) = true, want false", p)
+		}
 	}
 }
 

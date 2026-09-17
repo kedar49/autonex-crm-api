@@ -45,6 +45,7 @@ type Action struct {
 	Title       string     `json:"title"`
 	DueAt       time.Time  `json:"dueAt"`
 	Status      string     `json:"status"`
+	Priority    string     `json:"priority"`
 	AssignedTo  *string    `json:"assignedTo"`
 	AccountID   *string    `json:"accountId"`
 	LeadID      *string    `json:"leadId"`
@@ -58,7 +59,7 @@ type store struct {
 	pool *pgxpool.Pool
 }
 
-const actionColumns = `id::text, title, due_at, status, assigned_to::text, account_id::text,
+const actionColumns = `id::text, title, due_at, status, priority, assigned_to::text, account_id::text,
 	lead_id::text, deal_id::text, completed_at, created_at, updated_at`
 
 // Filter narrows the org's action list; every field is optional (a zero value
@@ -115,10 +116,10 @@ func (s *store) get(ctx context.Context, orgID, id string) (Action, error) {
 
 func (s *store) create(ctx context.Context, orgID string, in Input) (Action, error) {
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO follow_ups (org_id, title, due_at, assigned_to, account_id, lead_id, deal_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO follow_ups (org_id, title, due_at, assigned_to, account_id, lead_id, deal_id, priority)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING `+actionColumns,
-		orgID, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.DealID)
+		orgID, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.DealID, in.Priority)
 	return scanAction(row)
 }
 
@@ -126,12 +127,13 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Action,
 	row := s.pool.QueryRow(ctx,
 		`UPDATE follow_ups
 		 SET title = $3, due_at = $4, assigned_to = $5, account_id = $6, lead_id = $7, status = $8,
-		     deal_id = $9,
+		     deal_id = $9, priority = $10,
 		     completed_at = CASE WHEN $8 = 'done' THEN coalesce(completed_at, now()) ELSE NULL END,
 		     updated_at = now()
 		 WHERE org_id = $1 AND id = $2
 		 RETURNING `+actionColumns,
-		orgID, id, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.Status, in.DealID)
+		orgID, id, in.Title, in.DueAt, in.AssignedTo, in.AccountID, in.LeadID, in.Status, in.DealID,
+		in.Priority)
 	return scanAction(row)
 }
 
@@ -239,7 +241,7 @@ type rowScanner interface {
 
 func scanAction(row rowScanner) (Action, error) {
 	var a Action
-	err := row.Scan(&a.ID, &a.Title, &a.DueAt, &a.Status, &a.AssignedTo, &a.AccountID,
+	err := row.Scan(&a.ID, &a.Title, &a.DueAt, &a.Status, &a.Priority, &a.AssignedTo, &a.AccountID,
 		&a.LeadID, &a.DealID, &a.CompletedAt, &a.CreatedAt, &a.UpdatedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows), database.IsInvalidTextRepr(err):
