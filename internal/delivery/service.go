@@ -23,6 +23,9 @@ var (
 	// ErrClientTaken means another row in this organization already tracks that
 	// client. Import upserts on the client name, so it has to stay unique.
 	ErrClientTaken = errors.New("a row for that client already exists")
+	// ErrDealTaken covers the one-row-per-deal index: a sheet that names the same
+	// deal on two lines is asking for two tracker rows against one deal.
+	ErrDealTaken = errors.New("a row for that deal already exists")
 )
 
 // maxRows caps a list fetch. The tracker is a working sheet, not an archive; a

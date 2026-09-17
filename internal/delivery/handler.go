@@ -154,6 +154,8 @@ func (h *Handler) writeErr(w http.ResponseWriter, err error, fallback string) {
 			Message: "that row no longer exists"},
 		httpx.Rule{Err: ErrClientTaken, Status: http.StatusConflict,
 			Message: "another row already tracks that client"},
+		httpx.Rule{Err: ErrDealTaken, Status: http.StatusConflict,
+			Message: "another row already tracks that deal"},
 		httpx.Rule{Err: ErrNoHeader, Status: http.StatusBadRequest,
 			Message: "could not find a header row — the sheet needs a row of column names, including one for the client"},
 		httpx.Rule{Err: ErrNoClientColumn, Status: http.StatusBadRequest,
