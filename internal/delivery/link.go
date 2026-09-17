@@ -88,8 +88,16 @@ func UnlinkDeal(ctx context.Context, q Querier, dealID string) error {
 // tracker row is filed under who it is for, and a deal without an account still
 // has to land somewhere findable.
 func EnsureRowForDeal(ctx context.Context, q Querier, orgID, dealID, userID string) (bool, error) {
+	// created_by / updated_by are a FK to users. An actor with no row there must
+	// become NULL, or moving a deal to delivery fails outright instead of just
+	// losing the attribution.
+	actor, err := knownActor(ctx, q, userID)
+	if err != nil {
+		return false, err
+	}
+
 	var created bool
-	err := q.QueryRow(ctx,
+	err = q.QueryRow(ctx,
 		`WITH deal AS (
 		   SELECT d.id,
 		          COALESCE(NULLIF(btrim(a.name), ''), d.title, 'Untitled') AS client,
@@ -128,7 +136,7 @@ func EnsureRowForDeal(ctx context.Context, q Querier, orgID, dealID, userID stri
 		   RETURNING id
 		 )
 		 SELECT EXISTS (SELECT 1 FROM inserted) OR EXISTS (SELECT 1 FROM adopted)`,
-		dealID, orgID, nullableID(userID),
+		dealID, orgID, actor,
 	).Scan(&created)
 	return created, err
 }
