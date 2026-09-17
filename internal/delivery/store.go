@@ -150,9 +150,9 @@ func (s *store) update(ctx context.Context, orgID, userID, id string, in Input) 
 		return r, mapWriteErr(err)
 	}
 
-	// Push the three shared columns back onto the linked deal, so the deal form
-	// and the board show what the tracker was just told. A row with no deal
-	// updates nothing.
+	// Push the shared columns back onto the linked deal, so the deal form and the
+	// board show what the tracker was just told. A row with no deal updates
+	// nothing, which is the case for every hand-added and imported row.
 	if r.DealID != nil {
 		if _, err := s.pool.Exec(ctx,
 			`UPDATE deals
@@ -162,8 +162,44 @@ func (s *store) update(ctx context.Context, orgID, userID, id string, in Input) 
 		); err != nil {
 			return Row{}, err
 		}
+
+		// And move the deal to the stage the chosen label means. Guarded against
+		// the labels that mean more than one stage — see SyncStageToDeal.
+		if in.CurrentStages != nil {
+			if _, err := SyncStageToDeal(ctx, s.pool, *r.DealID, *in.CurrentStages); err != nil {
+				return Row{}, err
+			}
+			// The row was read back before the deal moved, so its denormalised
+			// deal_stage would be one edit stale on the response the grid renders.
+			if err := s.refreshDealStage(ctx, &r); err != nil {
+				return Row{}, err
+			}
+		}
 	}
 	return r, nil
+}
+
+// refreshDealStage re-reads the linked deal's stage onto an already-scanned row.
+//
+// The update statement returns the row as it was when it was written, which is
+// before the deal moved. Without this the grid would show the previous stage in
+// the Deal column until the next refetch, and the user would reasonably conclude
+// the sync had not worked.
+func (s *store) refreshDealStage(ctx context.Context, r *Row) error {
+	if r.DealID == nil {
+		return nil
+	}
+	var stage *string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT stage FROM deals WHERE id = $1 AND deleted_at IS NULL`,
+		*r.DealID).Scan(&stage); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	r.DealStage = stage
+	return nil
 }
 
 func (s *store) delete(ctx context.Context, orgID, id string) error {

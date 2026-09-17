@@ -46,9 +46,6 @@ type Conversion struct {
 
 const defaultDealStage = "discovery"
 
-// deliveryStage is the point at which a deal acquires a row in the client delivery tracker.
-const deliveryStage = "delivery"
-
 // validDealStages mirrors deals.Stages.
 var validDealStages = map[string]bool{
 	"discovery": true, "site_assessment": true, "quote_sent": true,
@@ -265,15 +262,16 @@ func (s *store) convert(
 		return Conversion{}, err
 	}
 
-	// 8. Sync Delivery tracker if stage is delivery
+	// 8. Give the converted deal its tracker row, at whatever stage it starts in.
+	// Every deal gets one now, so the tracker's stage column mirrors the board
+	// from the first step rather than only from delivery onwards.
 	userID := middleware.UserID(ctx)
-	if stage == deliveryStage {
-		_, _ = delivery.EnsureRowForDeal(ctx, s.pool, orgID, dealID, userID)
-	}
+	_, _ = delivery.EnsureRowForDeal(ctx, s.pool, orgID, dealID, userID)
 	_ = delivery.SyncFromDeal(ctx, s.pool, dealID, delivery.DealFields{
 		Products:     products,
 		Location:     location,
 		TotalCameras: totalCameras,
+		Stage:        &stage,
 	})
 
 	return Conversion{

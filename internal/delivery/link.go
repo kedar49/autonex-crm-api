@@ -30,18 +30,67 @@ type DealFields struct {
 	Products     *string
 	Location     *string
 	TotalCameras *int
+	// Stage is the deal's kanban stage, pushed onto the tracker's
+	// "Current Stage(s)" column through the mapping in stages.go. Nil leaves the
+	// column untouched, for writes that are not about the pipeline.
+	Stage *string
 }
 
 // SyncFromDeal pushes a deal's deployment fields onto its linked tracker row.
 // A deal with no tracker row is a no-op, which is the common case: most deals
 // never reach delivery.
 func SyncFromDeal(ctx context.Context, q Querier, dealID string, f DealFields) error {
+	// The stage, and every tracker label that already describes it.
+	//
+	// The second part is what protects a sub-stage: a deal in site_assessment is
+	// honestly described by both "Use Case Discussion" and "NDA / Demo", so if
+	// the tracker already says either, an unrelated deal edit must not flatten it
+	// back to the canonical wording. Someone chose that row of the sheet.
+	var label string
+	var equivalent []string
+	if f.Stage != nil {
+		label = MapDealStageToTracker(*f.Stage)
+		equivalent = trackerLabelsFor(*f.Stage)
+	}
+
 	_, err := q.Exec(ctx,
 		`UPDATE delivery_tracker
-		    SET products = $2, locations = $3, total_cameras = $4
+		    SET products = $2, locations = $3, total_cameras = $4,
+		        current_stages = CASE
+		          WHEN $5 = '' THEN current_stages
+		          WHEN COALESCE(current_stages, '') = ANY($6::text[]) THEN current_stages
+		          ELSE $5
+		        END
 		  WHERE deal_id = $1`,
-		dealID, f.Products, f.Location, f.TotalCameras)
+		dealID, f.Products, f.Location, f.TotalCameras, label, equivalent)
 	return err
+}
+
+// SyncStageToDeal moves a tracker row's linked deal to the stage its
+// "Current Stage(s)" label means. Reports whether the deal actually moved.
+//
+// The guard is the mirror of the one in SyncFromDeal, and matters just as much:
+// negotiation has no tracker wording of its own and shows as "Quotation Sent",
+// so re-saving that cell on a deal already in negotiation would otherwise read
+// the label back as quote_sent and drag the deal backwards. Any stage that
+// already displays as the chosen label is therefore left where it is.
+func SyncStageToDeal(ctx context.Context, q Querier, dealID, trackerStage string) (bool, error) {
+	target := MapTrackerStageToDeal(trackerStage)
+	if target == "" {
+		return false, nil // a label with no kanban meaning, or a blank cell
+	}
+
+	tag, err := q.Exec(ctx,
+		`UPDATE deals
+		    SET stage = $2, updated_at = now()
+		  WHERE id = $1 AND deleted_at IS NULL
+		    AND stage <> $2
+		    AND stage <> ALL($3::text[])`,
+		dealID, target, dealStagesFor(trackerStage))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // UnlinkDeal detaches every tracker row from a deal that is going away.

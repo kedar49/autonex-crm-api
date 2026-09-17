@@ -264,16 +264,16 @@ func (s *store) leadBelongsToAccount(ctx context.Context, leadID, accountID stri
 	return ok, err
 }
 
-// deliveryStage is the point at which a deal acquires a row in the client
-// delivery tracker. Named rather than inlined so the board, the form and the
-// drag handler cannot disagree about which stage means "being installed".
-const deliveryStage = "delivery"
-
 // syncDelivery keeps the tracker in step with a deal that has just been written.
 //
-// Two things happen here, in this order: a deal that has reached delivery gets
-// its tracker row (created, or adopted from a matching unlinked one), and then
-// the shared columns are pushed onto whatever row it now has.
+// Two things happen here, in this order: the deal gets its tracker row (created,
+// or adopted from a matching unlinked one), and then the shared columns —
+// products, location, cameras, and now the stage — are pushed onto it.
+//
+// The row is ensured at every stage, not just delivery. That is what makes the
+// tracker's "Current Stage(s)" column a live mirror of the board: a column that
+// only started tracking once a deal was already being installed would be blank
+// for the part of the pipeline anyone actually wants to watch.
 //
 // Failures are returned rather than swallowed: a deal whose tracker row silently
 // failed to appear is exactly the kind of gap this linking was asked for.
@@ -284,15 +284,14 @@ const deliveryStage = "delivery"
 // the context records NULL, which is accurate.
 func (s *store) syncDelivery(ctx context.Context, orgID string, d Deal) error {
 	userID := middleware.UserID(ctx)
-	if d.Stage == deliveryStage {
-		if _, err := delivery.EnsureRowForDeal(ctx, s.pool, orgID, d.ID, userID); err != nil {
-			return err
-		}
+	if _, err := delivery.EnsureRowForDeal(ctx, s.pool, orgID, d.ID, userID); err != nil {
+		return err
 	}
 	return delivery.SyncFromDeal(ctx, s.pool, d.ID, delivery.DealFields{
 		Products:     d.Products,
 		Location:     d.Location,
 		TotalCameras: d.TotalCameras,
+		Stage:        &d.Stage,
 	})
 }
 
