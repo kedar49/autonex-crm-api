@@ -52,25 +52,15 @@ func SyncFromDeal(ctx context.Context, q Querier, dealID string, f DealFields) e
 // keep is a deal_id pointing at a retired deal: the grid would render a deal
 // column with no title and no stage, and EnsureRowForDeal would refuse to adopt
 // the row for the deal that replaces it.
-// The NOT EXISTS is what keeps the delete from failing. delivery_tracker_client_idx
-// is unique on (org_id, client) *among unlinked rows only* — a client with two
-// deals legitimately has two rows — so clearing deal_id can collide with an
-// unlinked row that already names the same client, and the deal's delete would
-// roll back on a unique violation. That row keeps its dead pointer instead: the
-// read shape resolves deal_id through a join that drops deleted deals, so it
-// still reads and renders as unlinked either way.
+// Every matching row is detached. This used to skip any row whose client was
+// already named by an unlinked row, because unlinking it would have collided
+// with the uniqueness guard on (org_id, client, location) and rolled the deal's
+// delete back. That guard is gone (migration 000020), so the exception it
+// existed for is gone with it — and skipping a row left it holding a pointer at
+// a deleted deal, which EnsureRowForDeal would then refuse to adopt.
 func UnlinkDeal(ctx context.Context, q Querier, dealID string) error {
 	_, err := q.Exec(ctx,
-		`UPDATE delivery_tracker t
-		    SET deal_id = NULL
-		  WHERE t.deal_id = $1
-		    AND NOT EXISTS (
-		          SELECT 1 FROM delivery_tracker o
-		           WHERE o.org_id = t.org_id
-		             AND o.id <> t.id
-		             AND o.deal_id IS NULL
-		             AND lower(btrim(o.client)) = lower(btrim(t.client))
-		        )`, dealID)
+		`UPDATE delivery_tracker SET deal_id = NULL WHERE deal_id = $1`, dealID)
 	return err
 }
 
