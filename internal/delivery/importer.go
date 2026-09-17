@@ -691,7 +691,6 @@ func preferRow(candidate, incumbent Row) bool {
 	return candidate.CreatedAt.Before(incumbent.CreatedAt)
 }
 
-
 func hasField(mapping map[int]string, field string) bool {
 	_, ok := fieldColumn(mapping, field)
 	return ok

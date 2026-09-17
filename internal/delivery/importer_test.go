@@ -719,5 +719,3 @@ func TestParseSalesPersonDeliveryTrackerColumns(t *testing.T) {
 		t.Errorf("expected 'Delete row' in ignored columns, got %v", ignored)
 	}
 }
-
-
