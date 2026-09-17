@@ -67,6 +67,7 @@ type Row struct {
 // cell" (explicit null) from the zero value.
 type Input struct {
 	Client             string  `json:"client"`
+	DealTitle          *string `json:"dealTitle,omitempty"`
 	Products           *string `json:"products"`
 	Locations          *string `json:"locations"`
 	TotalCameras       *int    `json:"totalCameras"`
@@ -155,6 +156,7 @@ func validate(in Input) (Input, error) {
 		return Input{}, apperr.Invalid("total cameras cannot be negative")
 	}
 
+	in.DealTitle = trimOptional(in.DealTitle)
 	in.Products = trimOptional(in.Products)
 	in.Locations = trimOptional(in.Locations)
 	in.Status = trimOptional(in.Status)

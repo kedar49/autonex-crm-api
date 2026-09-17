@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/go-crm/services/pkg/apperr"
@@ -236,26 +237,41 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 	actor := nullableID(userID)
 
 	for _, in := range rows {
-		existingID, dealID, err := resolveByClient(ctx, tx, orgID, in.Client)
+		existingID, dealID, err := resolveByClient(ctx, tx, orgID, in.Client, in.Locations, in.DealTitle)
 		if err != nil {
 			return CommitResult{}, err
 		}
 
+		dealIDPtr := nullableID(dealID)
+
 		if existingID == "" {
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO delivery_tracker
-				   (org_id, client, products, locations, total_cameras, status,
+				   (org_id, deal_id, client, products, locations, total_cameras, status,
 				    implementation_date, current_stages, key_contacts, next_steps, notes,
 				    position, created_by, updated_by)
 				 VALUES
-				   ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-				    (SELECT COALESCE(max(position), 0) + $12 FROM delivery_tracker WHERE org_id = $1),
-				    $13, $13)`,
-				orgID, in.Client, in.Products, in.Locations, in.TotalCameras, in.Status,
+				   ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+				    (SELECT COALESCE(max(position), 0) + $13 FROM delivery_tracker WHERE org_id = $1),
+				    $14, $14)`,
+				orgID, dealIDPtr, in.Client, in.Products, in.Locations, in.TotalCameras, in.Status,
 				in.ImplementationDate.timePtr(), in.CurrentStages, in.KeyContacts,
 				in.NextSteps, in.Notes, positionStep, actor,
 			); err != nil {
 				return CommitResult{}, mapWriteErr(err)
+			}
+			if dealID != "" {
+				if _, err := tx.Exec(ctx,
+					`UPDATE deals SET
+					   products      = COALESCE($2, products),
+					   location      = COALESCE($3, location),
+					   total_cameras = COALESCE($4, total_cameras),
+					   updated_at    = now()
+					 WHERE id = $1 AND deleted_at IS NULL`,
+					dealID, in.Products, in.Locations, in.TotalCameras,
+				); err != nil {
+					return CommitResult{}, err
+				}
 			}
 			out.Created++
 			continue
@@ -264,18 +280,19 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 		if _, err := tx.Exec(ctx,
 			`UPDATE delivery_tracker SET
 			   client              = $2,
-			   products            = COALESCE($3, products),
-			   locations           = COALESCE($4, locations),
-			   total_cameras       = COALESCE($5, total_cameras),
-			   status              = COALESCE($6, status),
-			   implementation_date = COALESCE($7, implementation_date),
-			   current_stages      = COALESCE($8, current_stages),
-			   key_contacts        = COALESCE($9, key_contacts),
-			   next_steps          = COALESCE($10, next_steps),
-			   notes               = COALESCE($11, notes),
-			   updated_by          = $12
+			   deal_id             = COALESCE(deal_id, $3),
+			   products            = COALESCE($4, products),
+			   locations           = COALESCE($5, locations),
+			   total_cameras       = COALESCE($6, total_cameras),
+			   status              = COALESCE($7, status),
+			   implementation_date = COALESCE($8, implementation_date),
+			   current_stages      = COALESCE($9, current_stages),
+			   key_contacts        = COALESCE($10, key_contacts),
+			   next_steps          = COALESCE($11, next_steps),
+			   notes               = COALESCE($12, notes),
+			   updated_by          = $13
 			 WHERE id = $1`,
-			existingID, in.Client, in.Products, in.Locations, in.TotalCameras,
+			existingID, in.Client, dealIDPtr, in.Products, in.Locations, in.TotalCameras,
 			in.Status, in.ImplementationDate.timePtr(), in.CurrentStages,
 			in.KeyContacts, in.NextSteps, in.Notes, actor,
 		); err != nil {
@@ -313,22 +330,160 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 // is a statement about a client rather than about one sale. Falling back to the
 // oldest linked row means re-importing a client that has since been linked
 // updates that row instead of quietly growing a duplicate beside it.
-func resolveByClient(ctx context.Context, q Querier, orgID, client string) (string, string, error) {
+func resolveByClient(ctx context.Context, q Querier, orgID, client string, location, dealTitle *string) (string, string, error) {
 	var id, dealID *string
-	err := q.QueryRow(ctx,
-		`SELECT id::text, deal_id::text
-		   FROM delivery_tracker
-		  WHERE org_id = $1 AND lower(btrim(client)) = lower(btrim($2))
-		  ORDER BY (deal_id IS NOT NULL), created_at, id
-		  LIMIT 1`,
-		orgID, client).Scan(&id, &dealID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", nil
+
+	dealStr := ""
+	if dealTitle != nil {
+		dealStr = strings.TrimSpace(*dealTitle)
 	}
-	if err != nil {
+	if dealStr != "" {
+		var dID string
+		if err := q.QueryRow(ctx,
+			`SELECT d.id::text FROM deals d WHERE d.deleted_at IS NULL AND lower(btrim(d.title)) = lower(btrim($1)) LIMIT 1`,
+			dealStr).Scan(&dID); err == nil && dID != "" {
+			dealID = &dID
+			var tID string
+			if err := q.QueryRow(ctx,
+				`SELECT t.id::text FROM delivery_tracker t WHERE t.org_id = $1 AND t.deal_id = $2 LIMIT 1`,
+				orgID, dID).Scan(&tID); err == nil && tID != "" {
+				id = &tID
+			}
+		}
+	}
+
+	locStr := ""
+	if location != nil {
+		locStr = strings.TrimSpace(*location)
+	}
+
+	// 1. Try matching on client name and location (if provided)
+	var err error
+	if id != nil {
+		err = nil
+	} else if locStr != "" {
+		err = q.QueryRow(ctx,
+			`SELECT id::text, deal_id::text
+			   FROM delivery_tracker
+			  WHERE org_id = $1
+			    AND lower(btrim(client)) = lower(btrim($2))
+			    AND locations IS NOT NULL
+			    AND lower(btrim(locations)) = lower(btrim($3))
+			  ORDER BY (deal_id IS NOT NULL), created_at, id
+			  LIMIT 1`,
+			orgID, client, locStr).Scan(&id, &dealID)
+	} else {
+		err = pgx.ErrNoRows
+	}
+
+	// 2. Try matching on client name alone (only if locStr is empty, or existing row has no location)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if locStr != "" {
+			err = q.QueryRow(ctx,
+				`SELECT id::text, deal_id::text
+				   FROM delivery_tracker
+				  WHERE org_id = $1
+				    AND lower(btrim(client)) = lower(btrim($2))
+				    AND (locations IS NULL OR btrim(locations) = '')
+				  ORDER BY (deal_id IS NOT NULL), created_at, id
+				  LIMIT 1`,
+				orgID, client).Scan(&id, &dealID)
+		} else {
+			err = q.QueryRow(ctx,
+				`SELECT id::text, deal_id::text
+				   FROM delivery_tracker
+				  WHERE org_id = $1 AND lower(btrim(client)) = lower(btrim($2))
+				  ORDER BY (deal_id IS NOT NULL), created_at, id
+				  LIMIT 1`,
+				orgID, client).Scan(&id, &dealID)
+		}
+	}
+
+	// 3. Fallback: normalize non-alphanumeric characters generically
+	if errors.Is(err, pgx.ErrNoRows) {
+		cleanedClient := cleanIdentifier(client)
+		if cleanedClient != "" {
+			if locStr != "" {
+				err = q.QueryRow(ctx,
+					`SELECT id::text, deal_id::text
+					   FROM delivery_tracker
+					  WHERE org_id = $1
+					    AND regexp_replace(lower(client), '[^a-z0-9]', '', 'g') = $2
+					    AND (locations IS NULL OR btrim(locations) = '' OR lower(btrim(locations)) = lower(btrim($3)))
+					  ORDER BY (deal_id IS NOT NULL), created_at, id
+					  LIMIT 1`,
+					orgID, cleanedClient, locStr).Scan(&id, &dealID)
+			} else {
+				err = q.QueryRow(ctx,
+					`SELECT id::text, deal_id::text
+					   FROM delivery_tracker
+					  WHERE org_id = $1 AND regexp_replace(lower(client), '[^a-z0-9]', '', 'g') = $2
+					  ORDER BY (deal_id IS NOT NULL), created_at, id
+					  LIMIT 1`,
+					orgID, cleanedClient).Scan(&id, &dealID)
+			}
+		}
+	}
+
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return "", "", err
 	}
-	return derefOr(id), derefOr(dealID), nil
+
+	resID := derefOr(id)
+	resDealID := derefOr(dealID)
+
+	// If row has no linked deal yet, check if an existing deal matches this client and location
+	if resDealID == "" {
+		var foundDealID string
+		var dErr error
+		if locStr != "" {
+			dErr = q.QueryRow(ctx,
+				`SELECT d.id::text
+				   FROM deals d
+				   LEFT JOIN accounts a ON a.id = d.account_id
+				  WHERE d.deleted_at IS NULL
+				    AND (lower(btrim(d.title)) = lower(btrim($1)) OR (a.name IS NOT NULL AND lower(btrim(a.name)) = lower(btrim($1))))
+				    AND d.location IS NOT NULL
+				    AND lower(btrim(d.location)) = lower(btrim($2))
+				  ORDER BY d.created_at DESC
+				  LIMIT 1`, client, locStr).Scan(&foundDealID)
+			if foundDealID == "" {
+				dErr = q.QueryRow(ctx,
+					`SELECT d.id::text
+					   FROM deals d
+					   LEFT JOIN accounts a ON a.id = d.account_id
+					  WHERE d.deleted_at IS NULL
+					    AND (lower(btrim(d.title)) = lower(btrim($1)) OR (a.name IS NOT NULL AND lower(btrim(a.name)) = lower(btrim($1))))
+					    AND (d.location IS NULL OR btrim(d.location) = '')
+					  ORDER BY d.created_at DESC
+					  LIMIT 1`, client).Scan(&foundDealID)
+			}
+		} else {
+			dErr = q.QueryRow(ctx,
+				`SELECT d.id::text
+				   FROM deals d
+				   LEFT JOIN accounts a ON a.id = d.account_id
+				  WHERE d.deleted_at IS NULL
+				    AND (lower(btrim(d.title)) = lower(btrim($1)) OR (a.name IS NOT NULL AND lower(btrim(a.name)) = lower(btrim($1))))
+				  ORDER BY d.created_at DESC
+				  LIMIT 1`, client).Scan(&foundDealID)
+		}
+		if dErr == nil && foundDealID != "" {
+			resDealID = foundDealID
+		}
+	}
+
+	return resID, resDealID, nil
+}
+
+func cleanIdentifier(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func derefOr(v *string) string {

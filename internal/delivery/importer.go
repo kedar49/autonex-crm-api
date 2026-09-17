@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -72,6 +73,10 @@ var headerAliases = map[string]string{
 	"clientname":         "client",
 	"customer":           "client",
 	"account":            "client",
+	"deal":               "deal",
+	"deals":              "deal",
+	"dealtitle":          "deal",
+	"dealname":           "deal",
 	"product":            "products",
 	"products":           "products",
 	"producttype":        "products",
@@ -81,6 +86,8 @@ var headerAliases = map[string]string{
 	"locations":          "locations",
 	"site":               "locations",
 	"sites":              "locations",
+	"siteplant":          "locations",
+	"plant":              "locations",
 	"totalcameras":       "totalCameras",
 	"cameras":            "totalCameras",
 	"cameracount":        "totalCameras",
@@ -90,6 +97,9 @@ var headerAliases = map[string]string{
 	"implementation":     "implementationDate",
 	"golivedate":         "implementationDate",
 	"installdate":        "implementationDate",
+	"kickoffdate":        "implementationDate",
+	"pocstart":           "implementationDate",
+	"deploymentstart":    "implementationDate",
 	"date":               "implementationDate",
 	"currentstage":       "currentStages",
 	"currentstages":      "currentStages",
@@ -154,9 +164,14 @@ func (s *Service) Preview(ctx context.Context, orgID, filename string, r io.Read
 	// the preview and the commit pick the same row.
 	byClient := make(map[string]Row, len(existing))
 	for _, row := range existing {
-		prior, seen := byClient[clientKey(row.Client)]
+		locKey := clientLocationKey(row.Client, row.Locations)
+		prior, seen := byClient[locKey]
 		if !seen || preferRow(row, prior) {
-			byClient[clientKey(row.Client)] = row
+			byClient[locKey] = row
+		}
+		cKey := clientKey(row.Client)
+		if _, seen := byClient[cKey]; !seen {
+			byClient[cKey] = row
 		}
 	}
 
@@ -165,16 +180,19 @@ func (s *Service) Preview(ctx context.Context, orgID, filename string, r io.Read
 		Errors:         errs,
 		IgnoredColumns: ignored,
 	}
-	// A sheet listing the same client twice would otherwise preview as two
-	// creates and commit as one create plus one update. Fold them: the later
-	// line wins, which is how a person reading top-to-bottom would resolve it.
+	// A sheet listing the same client and location twice folds: later line wins.
 	seen := make(map[string]int, len(parsed))
 
 	for _, p := range parsed {
-		key := clientKey(p.values.Client)
+		locKey := clientLocationKey(p.values.Client, p.values.Locations)
 		row := PreviewRow{SheetRow: p.sheetRow, Values: p.values, Action: ActionCreate}
 
-		if prior, ok := existing2(byClient, key); ok {
+		prior, ok := byClient[locKey]
+		if !ok {
+			prior, ok = byClient[clientKey(p.values.Client)]
+		}
+
+		if ok {
 			row.ExistingID = &prior.ID
 			row.MatchedDeal = prior.DealTitle
 			row.Changes = diff(prior, p.values)
@@ -185,12 +203,12 @@ func (s *Service) Preview(ctx context.Context, orgID, filename string, r io.Read
 			}
 		}
 
-		if at, dup := seen[key]; dup {
+		if at, dup := seen[locKey]; dup {
 			out.Rows[at] = row
 			out.Rows[at].SheetRow = p.sheetRow
 			continue
 		}
-		seen[key] = len(out.Rows)
+		seen[locKey] = len(out.Rows)
 		out.Rows = append(out.Rows, row)
 	}
 
@@ -240,7 +258,8 @@ type parsedRow struct {
 // parseSheet dispatches on the file extension. CSV is accepted alongside xlsx
 // because exporting one is the fastest way out of Google Sheets.
 func parseSheet(filename string, r io.Reader) ([]parsedRow, []string, []string, error) {
-	if strings.EqualFold(strings.TrimPrefix(fileExt(filename), "."), "csv") {
+	ext := strings.ToLower(strings.TrimPrefix(fileExt(filename), "."))
+	if ext == "csv" || ext == "tsv" || ext == "tab" || ext == "txt" {
 		return parseCSV(r)
 	}
 	return parseXLSX(r)
@@ -251,6 +270,56 @@ func fileExt(name string) string {
 		return name[i:]
 	}
 	return ""
+}
+
+func isPlaceholder(v string) bool {
+	v = strings.TrimSpace(v)
+	lower := strings.ToLower(v)
+	return lower == "" || lower == "tbd" || lower == "tbc" || lower == "n/a" || lower == "na" || lower == "none" || lower == "-" || lower == "--"
+}
+
+// NormalizeTrackerStage normalizes varied sheet stage spellings to standard delivery stages.
+func NormalizeTrackerStage(raw string) string {
+	s := strings.TrimSpace(raw)
+	lower := strings.ToLower(s)
+	switch {
+	case strings.Contains(lower, "lead") || strings.Contains(lower, "intro"):
+		return "Lead / Intro Call"
+	case strings.Contains(lower, "use case"):
+		return "Use Case Discussion"
+	case strings.Contains(lower, "nda") || strings.Contains(lower, "demo"):
+		return "NDA / Demo"
+	case strings.Contains(lower, "quotation") || strings.Contains(lower, "quote") || strings.Contains(lower, "proposal"):
+		return "Quotation Sent"
+	case strings.Contains(lower, "poc"):
+		return "PoC"
+	case strings.Contains(lower, "sow") || (strings.Contains(lower, "deploy") && !strings.Contains(lower, "live")):
+		return "Deployment"
+	case strings.Contains(lower, "live") || strings.Contains(lower, "deployed"):
+		return "Deployed / Live"
+	}
+	return s
+}
+
+func clientLocationKey(client string, loc *string) string {
+	ck := clientKey(client)
+	if loc == nil || strings.TrimSpace(*loc) == "" {
+		return ck
+	}
+	return ck + "::" + clientKey(*loc)
+}
+
+func isClientAlreadySeen(seenClients map[string]bool, name string) bool {
+	k := clientKey(name)
+	if seenClients[k] {
+		return true
+	}
+	for seen := range seenClients {
+		if strings.HasPrefix(seen, k) || strings.HasPrefix(k, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseXLSX(r io.Reader) ([]parsedRow, []string, []string, error) {
@@ -264,26 +333,114 @@ func parseXLSX(r io.Reader) ([]parsedRow, []string, []string, error) {
 	if len(sheets) == 0 {
 		return nil, nil, nil, apperr.Invalid("that workbook has no sheets")
 	}
-	// The first sheet only: the tracker's master tab is the first one, and
-	// silently merging per-client tabs behind it would be a guess.
-	grid, err := f.GetRows(sheets[0])
-	if err != nil {
-		return nil, nil, nil, apperr.Invalid("sheet %q could not be read", sheets[0])
+
+	masterSheet := sheets[0]
+	for _, s := range sheets {
+		lower := strings.ToLower(s)
+		if strings.Contains(lower, "master") || strings.Contains(lower, "client delivery") {
+			masterSheet = s
+			break
+		}
 	}
-	return rowsFromGrid(grid)
+
+	masterGrid, err := f.GetRows(masterSheet)
+	if err != nil {
+		return nil, nil, nil, apperr.Invalid("sheet %q could not be read", masterSheet)
+	}
+	rows, ignored, errs, err := rowsFromGrid(masterGrid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	seenClients := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		seenClients[clientKey(r.values.Client)] = true
+	}
+
+	for _, sheetName := range sheets {
+		if sheetName == masterSheet {
+			continue
+		}
+		lowerName := strings.ToLower(sheetName)
+		if strings.Contains(lowerName, "calendar") {
+			continue
+		}
+
+		grid, err := f.GetRows(sheetName)
+		if err != nil || len(grid) < 5 {
+			continue
+		}
+
+		clientName := strings.TrimSpace(sheetName)
+		if len(grid) > 0 && len(grid[0]) > 0 && strings.TrimSpace(grid[0][0]) != "" {
+			a1 := strings.TrimSpace(grid[0][0])
+			if !strings.Contains(strings.ToLower(a1), "tracker") && !strings.Contains(strings.ToLower(a1), "pipeline") {
+				clientName = a1
+			}
+		}
+
+		if isClientAlreadySeen(seenClients, clientName) {
+			continue
+		}
+
+		hIdx, mapping, _ := findHeader(grid)
+		if hIdx < 0 {
+			continue
+		}
+
+		for r := hIdx + 1; r < len(grid); r++ {
+			cells := grid[r]
+			if allBlank(cells) {
+				continue
+			}
+			in, err := rowFromCells(cells, mapping)
+			if err != nil {
+				continue
+			}
+			in.Client = clientName
+			if in.Locations != nil && strings.EqualFold(strings.TrimSpace(*in.Locations), "tbd") {
+				in.Locations = nil
+			}
+			rows = append(rows, parsedRow{
+				sheetRow: r + 1,
+				values:   in,
+			})
+			seenClients[clientKey(clientName)] = true
+		}
+	}
+
+	return rows, ignored, errs, nil
 }
 
 func parseCSV(r io.Reader) ([]parsedRow, []string, []string, error) {
-	reader := csv.NewReader(r)
-	// Exported sheets have ragged trailing columns; let the mapper decide what is
-	// missing rather than failing the whole file on a short line.
+	buf, err := io.ReadAll(r)
+	if err != nil {
+		return nil, nil, nil, apperr.Invalid("that file could not be read")
+	}
+
+	reader := csv.NewReader(bytes.NewReader(buf))
 	reader.FieldsPerRecord = -1
+
+	// Auto-detect tab delimiter: if first non-empty line has more tabs than commas, use tab
+	for _, line := range strings.Split(string(buf), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			if strings.Count(trimmed, "\t") > strings.Count(trimmed, ",") {
+				reader.Comma = '\t'
+			}
+			break
+		}
+	}
 
 	grid, err := reader.ReadAll()
 	if err != nil {
-		return nil, nil, nil, apperr.Invalid("that file could not be read as CSV")
+		return nil, nil, nil, apperr.Invalid("that file could not be read as CSV/TSV")
 	}
-	return rowsFromGrid(grid)
+	rows, ignored, errs, err := rowsFromGrid(grid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return rows, ignored, errs, nil
 }
 
 // rowsFromGrid turns a raw cell grid into tracker rows.
@@ -384,6 +541,8 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 		switch field {
 		case "client":
 			in.Client = value
+		case "deal":
+			in.DealTitle = &value
 		case "products":
 			in.Products = &value
 		case "locations":
@@ -391,7 +550,8 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 		case "status":
 			in.Status = &value
 		case "currentStages":
-			in.CurrentStages = &value
+			norm := NormalizeTrackerStage(value)
+			in.CurrentStages = &norm
 		case "keyContacts":
 			in.KeyContacts = &value
 		case "nextSteps":
@@ -399,12 +559,18 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 		case "notes":
 			in.Notes = &value
 		case "totalCameras":
+			if isPlaceholder(value) {
+				continue
+			}
 			n, err := parseCameraCount(value)
 			if err != nil {
 				return Input{}, err
 			}
 			in.TotalCameras = &n
 		case "implementationDate":
+			if isPlaceholder(value) || strings.HasPrefix(strings.ToLower(value), "tbd") {
+				continue
+			}
 			d, err := parseSheetDate(value)
 			if err != nil {
 				return Input{}, err
@@ -413,7 +579,7 @@ func rowFromCells(cells []string, mapping map[int]string) (Input, error) {
 			in.ImplementationDate = &parsed
 		}
 	}
-	if strings.TrimSpace(in.Client) == "" {
+	if hasField(mapping, "client") && strings.TrimSpace(in.Client) == "" {
 		return Input{}, errors.New("no client name")
 	}
 	return in, nil
@@ -433,13 +599,20 @@ func parseCameraCount(v string) (int, error) {
 		return 0, errors.New("total cameras is not a number: " + v)
 	}
 	f, err := strconv.ParseFloat(cleaned, 64)
-	if err != nil {
-		return 0, errors.New("total cameras is not a number: " + v)
+	if err == nil {
+		if f < 0 {
+			return 0, errors.New("total cameras cannot be negative: " + v)
+		}
+		return int(f), nil
 	}
-	if f < 0 {
-		return 0, errors.New("total cameras cannot be negative: " + v)
+	// Try parsing first number if it contains hyphen (e.g. "5-6")
+	parts := strings.Split(cleaned, "-")
+	if len(parts) > 1 && parts[0] != "" {
+		if first, err := strconv.ParseFloat(parts[0], 64); err == nil && first >= 0 {
+			return int(first), nil
+		}
 	}
-	return int(f), nil
+	return 0, errors.New("total cameras is not a number: " + v)
 }
 
 // parseSheetDate handles both spellings a date arrives in: text in one of the
@@ -518,10 +691,6 @@ func preferRow(candidate, incumbent Row) bool {
 	return candidate.CreatedAt.Before(incumbent.CreatedAt)
 }
 
-func existing2(m map[string]Row, key string) (Row, bool) {
-	r, ok := m[key]
-	return r, ok
-}
 
 func hasField(mapping map[int]string, field string) bool {
 	_, ok := fieldColumn(mapping, field)
