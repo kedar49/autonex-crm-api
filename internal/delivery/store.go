@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 
 const (
 	clientUniqueIdxName = "delivery_tracker_client_idx"
+	// dealUniqueIdxName enforces one tracker row per deal. A sheet naming the
+	// same deal on two lines trips it.
+	dealUniqueIdxName = "delivery_tracker_deal_idx"
 )
 
 type store struct {
@@ -241,10 +245,47 @@ func mapWriteErr(err error) error {
 		return ErrNotFound
 	case database.IsUniqueViolationOn(err, clientUniqueIdxName):
 		return ErrClientTaken
+	case database.IsUniqueViolationOn(err, dealUniqueIdxName):
+		return ErrDealTaken
 	case database.IsInvalidTextRepr(err):
 		return ErrNotFound
 	default:
 		return err
+	}
+}
+
+// rowErr names the line an import died on.
+//
+// A sheet is dozens of rows and the whole thing is one transaction, so a bare
+// "could not apply that import" leaves the user to find the bad line by
+// bisecting their own spreadsheet. Naming the row and the client turns that into
+// a single edit. The index is the position in the submitted batch, which is the
+// order the rows were previewed in.
+//
+// Constraint failures we recognize become caller-safe validation errors, since
+// the fix is in the sheet. Anything else is passed through and still answered as
+// a 500, because it is ours.
+func rowErr(i int, in Input, err error) error {
+	if err == nil {
+		return nil
+	}
+	client := strings.TrimSpace(in.Client)
+	if client == "" {
+		client = "(no client)"
+	}
+	switch {
+	case errors.Is(err, ErrClientTaken):
+		return apperr.Invalid(
+			"row %d (%s): another row already tracks that client at that location — remove the duplicate line and re-import",
+			i+1, client)
+	case errors.Is(err, ErrDealTaken):
+		return apperr.Invalid(
+			"row %d (%s): that deal already has a tracker row — two lines cannot point at one deal",
+			i+1, client)
+	case apperr.IsValidation(err):
+		return apperr.Invalid("row %d (%s): %s", i+1, client, err.Error())
+	default:
+		return fmt.Errorf("row %d (%s): %w", i+1, client, err)
 	}
 }
 
@@ -274,10 +315,10 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 		return CommitResult{}, err
 	}
 
-	for _, in := range rows {
+	for i, in := range rows {
 		existingID, dealID, err := resolveByClient(ctx, tx, orgID, in.Client, in.Locations, in.DealTitle)
 		if err != nil {
-			return CommitResult{}, err
+			return CommitResult{}, rowErr(i, in, err)
 		}
 
 		dealIDPtr := nullableID(dealID)
@@ -289,14 +330,22 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 				    implementation_date, current_stages, key_contacts, next_steps, notes,
 				    position, created_by, updated_by)
 				 VALUES
-				   ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+				   ($1,
+				    -- Only claim the deal if no row holds it yet. delivery_tracker_deal_idx
+				    -- allows one row per deal, and an import that tried to take an already
+				    -- claimed deal aborted the whole sheet with an opaque 500. Leaving the
+				    -- row unlinked keeps the import's data and costs only the link, which
+				    -- the next stage change or edit restores.
+				    (SELECT $2::uuid WHERE $2::uuid IS NULL
+				       OR NOT EXISTS (SELECT 1 FROM delivery_tracker o WHERE o.deal_id = $2::uuid)),
+				    $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
 				    (SELECT COALESCE(max(position), 0) + $13 FROM delivery_tracker WHERE org_id = $1),
 				    $14, $14)`,
 				orgID, dealIDPtr, in.Client, in.Products, in.Locations, in.TotalCameras, in.Status,
 				in.ImplementationDate.timePtr(), in.CurrentStages, in.KeyContacts,
 				in.NextSteps, in.Notes, positionStep, actor,
 			); err != nil {
-				return CommitResult{}, mapWriteErr(err)
+				return CommitResult{}, rowErr(i, in, mapWriteErr(err))
 			}
 			if dealID != "" {
 				if _, err := tx.Exec(ctx,
@@ -318,7 +367,11 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 		if _, err := tx.Exec(ctx,
 			`UPDATE delivery_tracker SET
 			   client              = $2,
-			   deal_id             = COALESCE(deal_id, $3),
+			   deal_id             = COALESCE(
+			                           deal_id,
+			                           (SELECT $3::uuid WHERE $3::uuid IS NULL
+			                              OR NOT EXISTS (SELECT 1 FROM delivery_tracker o
+			                                              WHERE o.deal_id = $3::uuid AND o.id <> $1::uuid))),
 			   products            = COALESCE($4, products),
 			   locations           = COALESCE($5, locations),
 			   total_cameras       = COALESCE($6, total_cameras),
@@ -334,7 +387,7 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 			in.Status, in.ImplementationDate.timePtr(), in.CurrentStages,
 			in.KeyContacts, in.NextSteps, in.Notes, actor,
 		); err != nil {
-			return CommitResult{}, mapWriteErr(err)
+			return CommitResult{}, rowErr(i, in, mapWriteErr(err))
 		}
 
 		// A sheet that updates a linked row has to reach the deal too, or the
