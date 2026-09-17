@@ -199,5 +199,7 @@ func writeErr(w http.ResponseWriter, err error, fallback string) {
 			Message: "this quote has been issued — revise it back to draft to make changes"},
 		httpx.Rule{Err: ErrRefNotFound, Status: http.StatusBadRequest,
 			Message: "a referenced account, contact, deal or owner is not part of your organization"},
+		httpx.Rule{Err: ErrUnknownTemplate, Status: http.StatusBadRequest,
+			Message: "that proposal template is not one this workspace can render"},
 	)
 }

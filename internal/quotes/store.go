@@ -4,6 +4,7 @@ package quotes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -66,6 +67,13 @@ type Quote struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
 
+	// Template names the document layout when this quote is a proposal rather
+	// than a bare price list. Nil is the ordinary quote, which is most of them.
+	Template *string `json:"template"`
+	// Proposal is the template's structured content. Populated by Get only: the
+	// list has no use for a multi-kilobyte document it does not render.
+	Proposal json.RawMessage `json:"proposal,omitempty"`
+
 	// Populated by Get, omitted from list responses.
 	Items []Item `json:"items,omitempty"`
 	// ItemCount lets the list show "3 items" without fetching them.
@@ -109,6 +117,7 @@ const quoteColumns = `
 	NULL::timestamptz                       AS accepted_at,
 	NULL::timestamptz                       AS declined_at,
 	q.created_at, q.updated_at,
+	pr.template,
 	(SELECT count(*) FROM quote_items i WHERE i.quote_id = q.id)`
 
 const quoteFrom = `
@@ -116,7 +125,8 @@ const quoteFrom = `
 	LEFT JOIN accounts      a ON a.id = q.account_id
 	LEFT JOIN deals          d ON d.id = q.deal_id
 	LEFT JOIN profiles       p ON p.id = q.created_by
-	LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current `
+	LEFT JOIN quote_versions v ON v.quote_id = q.id AND v.is_current
+	LEFT JOIN quote_proposals pr ON pr.quote_id = q.id `
 
 func (s *store) list(ctx context.Context, _, status string, limit, offset int) ([]Quote, error) {
 	// A single statement with an optional filter: passing '' means "any status",
@@ -162,6 +172,15 @@ func (s *store) get(ctx context.Context, _, id string) (Quote, error) {
 		return Quote{}, err
 	}
 	q.Items = items
+
+	// Only fetched here, never in the list: this is the whole document.
+	if q.Template != nil {
+		doc, err := s.proposal(ctx, id)
+		if err != nil {
+			return Quote{}, err
+		}
+		q.Proposal = doc
+	}
 	return q, nil
 }
 
@@ -223,6 +242,13 @@ func (s *store) create(ctx context.Context, orgID, currency string, in Input) (s
 	if err := recalculate(ctx, tx, orgID, id); err != nil {
 		return "", err
 	}
+	// In the same transaction as the quote: a proposal attached to a quote that
+	// rolled back would be an orphan no editor could ever reach.
+	if in.Template != nil {
+		if err := saveProposal(ctx, tx, id, *in.Template, in.Proposal); err != nil {
+			return "", translate(err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
@@ -259,6 +285,11 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) error {
 	}
 	if err := recalculate(ctx, tx, orgID, id); err != nil {
 		return err
+	}
+	if in.Template != nil {
+		if err := saveProposal(ctx, tx, id, *in.Template, in.Proposal); err != nil {
+			return translate(err)
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -439,7 +470,7 @@ func scanQuote(row rowScanner) (Quote, error) {
 		&q.Notes, &q.ValidUntil,
 		&q.Subtotal, &q.DiscountTotal, &q.TaxTotal, &q.Total,
 		&q.SentAt, &q.AcceptedAt, &q.DeclinedAt, &q.CreatedAt, &q.UpdatedAt,
-		&q.ItemCount)
+		&q.Template, &q.ItemCount)
 	if err != nil {
 		return Quote{}, translate(err)
 	}

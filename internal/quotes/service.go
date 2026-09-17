@@ -2,6 +2,7 @@ package quotes
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -59,6 +60,11 @@ type Input struct {
 	Notes       *string     `json:"notes"`
 	ValidUntil  *time.Time  `json:"validUntil"`
 	Items       []ItemInput `json:"items"`
+
+	// Template selects a document layout richer than a price list; nil leaves
+	// the quote an ordinary one. Proposal carries that template's content.
+	Template *string         `json:"template"`
+	Proposal json.RawMessage `json:"proposal"`
 }
 
 // Page is one page of quotes plus the totals a list UI needs.
@@ -195,6 +201,15 @@ func (s *Service) prepare(ctx context.Context, orgID string, in Input) (Input, e
 	in = normalize(in)
 	if err := validate(in); err != nil {
 		return Input{}, err
+	}
+
+	// Checked before the transaction opens: the database enforces the template
+	// name too, but a constraint violation reaches the user as a 500 where this
+	// reaches them as "unknown proposal template".
+	if in.Template != nil {
+		if err := validateTemplate(*in.Template, in.Proposal); err != nil {
+			return Input{}, err
+		}
 	}
 
 	// Every client-supplied foreign key needs an org check — the FK constraints
