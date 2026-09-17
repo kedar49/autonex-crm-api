@@ -93,6 +93,10 @@ func (s *store) list(ctx context.Context, orgID string, limit int) ([]Row, error
 // and written second, so two people adding a row at once cannot land on the same
 // slot.
 func (s *store) create(ctx context.Context, orgID, userID string, in Input) (Row, error) {
+	actor, err := knownActor(ctx, s.pool, userID)
+	if err != nil {
+		return Row{}, err
+	}
 	r, err := scanRow(s.pool.QueryRow(ctx,
 		`WITH inserted AS (
 		   INSERT INTO delivery_tracker
@@ -111,12 +115,16 @@ func (s *store) create(ctx context.Context, orgID, userID string, in Input) (Row
 		   LEFT JOIN deals dl ON dl.id = t.deal_id AND dl.deleted_at IS NULL`,
 		orgID, in.Client, in.Products, in.Locations, in.TotalCameras, in.Status,
 		in.ImplementationDate.timePtr(), in.CurrentStages, in.KeyContacts, in.NextSteps, in.Notes,
-		positionStep, nullableID(userID),
+		positionStep, actor,
 	))
 	return r, mapWriteErr(err)
 }
 
 func (s *store) update(ctx context.Context, orgID, userID, id string, in Input) (Row, error) {
+	actor, err := knownActor(ctx, s.pool, userID)
+	if err != nil {
+		return Row{}, err
+	}
 	r, err := scanRow(s.pool.QueryRow(ctx,
 		`WITH updated AS (
 		   UPDATE delivery_tracker
@@ -132,7 +140,7 @@ func (s *store) update(ctx context.Context, orgID, userID, id string, in Input) 
 		   LEFT JOIN deals dl ON dl.id = t.deal_id AND dl.deleted_at IS NULL`,
 		orgID, id, in.Client, in.Products, in.Locations, in.TotalCameras,
 		in.Status, in.ImplementationDate.timePtr(), in.CurrentStages,
-		in.KeyContacts, in.NextSteps, in.Notes, nullableID(userID),
+		in.KeyContacts, in.NextSteps, in.Notes, actor,
 	))
 	if err != nil {
 		return r, mapWriteErr(err)
@@ -196,6 +204,33 @@ func nullableID(id string) *string {
 	return &id
 }
 
+// knownActor resolves the acting user for created_by / updated_by, and returns
+// NULL for one the users table does not have.
+//
+// Those columns are a FK to users, so an id with no row raises a foreign key
+// violation — and because a whole import runs in one transaction, that took the
+// entire sheet down with an opaque 500 rather than dropping one attribution. A
+// caller can legitimately be unknown here: the columns are nullable and the FK
+// is ON DELETE SET NULL, so "unknown author" is already a state this table is
+// built to hold. Recording the rows without the name is strictly better than
+// refusing the import.
+//
+// The lookup runs once per import, not once per row.
+func knownActor(ctx context.Context, q Querier, userID string) (*string, error) {
+	if userID == "" {
+		return nil, nil
+	}
+	var id string
+	err := q.QueryRow(ctx, `SELECT id::text FROM users WHERE id = $1`, userID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
 // mapWriteErr translates the two Postgres errors a write can raise into domain
 // errors, so handlers answer 409/404 instead of 500.
 func mapWriteErr(err error) error {
@@ -234,7 +269,10 @@ func (s *store) upsertMany(ctx context.Context, orgID, userID string, rows []Inp
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var out CommitResult
-	actor := nullableID(userID)
+	actor, err := knownActor(ctx, tx, userID)
+	if err != nil {
+		return CommitResult{}, err
+	}
 
 	for _, in := range rows {
 		existingID, dealID, err := resolveByClient(ctx, tx, orgID, in.Client, in.Locations, in.DealTitle)
