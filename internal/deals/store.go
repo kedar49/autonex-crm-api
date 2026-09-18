@@ -3,6 +3,7 @@ package deals
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/go-crm/services/pkg/database"
@@ -144,7 +145,34 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error
 	if err != nil {
 		return Deal{}, err
 	}
+	s.markLeadConverted(ctx, in.LeadID)
 	return d, s.syncDelivery(ctx, orgID, d)
+}
+
+// markLeadConverted moves a linked lead to the converted stage.
+//
+// Attaching a lead to a deal is the lead becoming a deal, whichever screen it
+// happened on. Only the Convert action used to say so, which left the list with
+// two disagreeing answers to "is this converted?": the stage pill and the tab
+// counts read the lead's own status, while the deal link, the dialog's
+// Converted banner and the delete warning read "does a deal point at this
+// lead?". A deal created from the board satisfied the second and not the first,
+// so the lead sat at New while the rest of the screen called it converted, and
+// the Converted tab's count disagreed with the rows that looked converted.
+//
+// Best-effort on purpose: the deal is already written, and failing the request
+// now would report a deal that exists as an error. A lead left behind shows the
+// old mismatch, which the backfill in migration 000022 clears, rather than
+// costing someone the deal they just created.
+func (s *store) markLeadConverted(ctx context.Context, leadID *string) {
+	if leadID == nil || strings.TrimSpace(*leadID) == "" {
+		return
+	}
+	_, _ = s.pool.Exec(ctx,
+		`UPDATE leads
+		    SET status = 'converted', next_follow_up_date = NULL, updated_at = now()
+		  WHERE id = $1 AND deleted_at IS NULL AND status <> 'converted'`,
+		*leadID)
 }
 
 func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, error) {
@@ -168,6 +196,7 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	if err != nil {
 		return Deal{}, err
 	}
+	s.markLeadConverted(ctx, in.LeadID)
 	return d, s.syncDelivery(ctx, orgID, d)
 }
 

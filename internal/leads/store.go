@@ -102,8 +102,17 @@ const leadColumns = `
 	(SELECT max(act.occurred_at) FROM activities act
 	  WHERE act.entity_type = 'lead' AND act.entity_id = l.id
 	    AND act.type <> 'system'),
-	NULL::timestamptz                  AS converted_at,
-	(SELECT d.id::text FROM deals d WHERE d.lead_id = l.id AND d.deleted_at IS NULL LIMIT 1) AS converted_deal_id,
+	-- The conversion trail, read off the deal rather than stored on the lead.
+	-- converted_at was a hardcoded NULL, so the dialog's "Converted <date>"
+	-- rendered with no date on every converted lead. The deal's own created_at
+	-- is when the conversion happened, and it cannot drift from the link beside
+	-- it because both come from the same row.
+	(SELECT d.created_at FROM deals d
+	  WHERE d.lead_id = l.id AND d.deleted_at IS NULL
+	  ORDER BY d.created_at LIMIT 1)            AS converted_at,
+	(SELECT d.id::text FROM deals d
+	  WHERE d.lead_id = l.id AND d.deleted_at IS NULL
+	  ORDER BY d.created_at LIMIT 1)            AS converted_deal_id,
 	NULL::text                         AS converted_contact_id,
 	l.created_at, l.updated_at`
 
