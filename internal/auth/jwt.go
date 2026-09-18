@@ -5,7 +5,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 // issueAccessToken mints a short-lived, stateless HS256 access token whose

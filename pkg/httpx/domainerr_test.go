@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-crm/services/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
 )
 
 var (

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-crm/services/pkg/apperr"
-	"github.com/go-crm/services/pkg/database"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

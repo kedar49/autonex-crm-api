@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 func TestDomainAllowedWithNoListPermitsEverything(t *testing.T) {

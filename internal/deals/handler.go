@@ -6,10 +6,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/internal/activities"
-	"github.com/go-crm/services/internal/notify"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/internal/activities"
+	"github.com/Autonex009/autonex-crm-api/internal/notify"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
 )
 
 // Handler exposes the deals module's HTTP API.

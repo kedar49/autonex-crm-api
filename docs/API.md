@@ -1,6 +1,10 @@
 # go-CRM API Reference
 
 Base URL: `https://apidealbridge.autonexai360.com` · all paths prefixed `/api/v1`
+Local: `http://localhost:8080`
+
+See also: [AUTH.md](AUTH.md) (tokens, cookies, SSO) · [ERRORS.md](ERRORS.md) ·
+[INTEGRATION.md](INTEGRATION.md) (wiring a client up)
 
 **Auth** — every endpoint requires `Authorization: Bearer <accessToken>` except those
 marked **public**. The token comes from `/auth/login`, `/auth/register` or `/auth/refresh`.
@@ -27,6 +31,14 @@ and return `{ items, total, limit, offset }`.
 | GET | `/me` | — | `user` |
 
 `user`: `id`, `email`, `name`, `orgId`, `authProvider`
+
+**Client modes.** By default the refresh token is delivered as an HttpOnly cookie
+(`gocrm_refresh`, `Path=/api/v1/auth`, `SameSite=Lax`) and never appears in a
+response body — that is the browser path. A native client sends
+`X-Auth-Mode: token` on `/register`, `/login` and `/refresh`; the response then
+carries `refreshToken` in the JSON body and **no cookie is set**. Such a client
+posts `{ "refreshToken": "..." }` to `/refresh` and `/logout`. See
+[AUTH.md](AUTH.md).
 
 SSO is restricted by `SSO_ALLOWED_DOMAINS`; new SSO users join `SSO_DEFAULT_ORG_ID`.
 

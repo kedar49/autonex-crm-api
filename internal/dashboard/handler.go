@@ -11,12 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/go-crm/services/internal/deals"
-	"github.com/go-crm/services/internal/invoices"
-	"github.com/go-crm/services/internal/leads"
-	"github.com/go-crm/services/internal/quotes"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/internal/deals"
+	"github.com/Autonex009/autonex-crm-api/internal/invoices"
+	"github.com/Autonex009/autonex-crm-api/internal/leads"
+	"github.com/Autonex009/autonex-crm-api/internal/quotes"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
 )
 
 // StageSummary is one kanban column's contribution to a pipeline.

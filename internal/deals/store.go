@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-crm/services/pkg/database"
+	"github.com/Autonex009/autonex-crm-api/pkg/database"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/go-crm/services/internal/delivery"
-	"github.com/go-crm/services/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/internal/delivery"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

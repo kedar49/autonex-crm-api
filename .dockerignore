@@ -1,0 +1,13 @@
+# Keep the build context small — everything here is either rebuilt inside the
+# image or must never be baked into one.
+.git
+.github
+bin
+**/*.log
+.env
+.env.*
+!.env.example
+.vscode
+.idea
+docs
+README.md

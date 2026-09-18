@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-crm/services/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
 )
 
 // The guard checks below all run before the store is touched, so a zero Service

@@ -8,7 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/go-crm/services/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
 )
 
 type ctxKey string

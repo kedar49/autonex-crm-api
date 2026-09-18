@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/go-crm/services/pkg/apperr"
-	"github.com/go-crm/services/pkg/paging"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/paging"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

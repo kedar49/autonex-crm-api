@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 // calendarScope is the narrowest scope that can create an event with a Meet.

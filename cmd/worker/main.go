@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"log"
 
-	"github.com/go-crm/services/internal/integrations/google"
-	"github.com/go-crm/services/internal/integrations/slack"
-	"github.com/go-crm/services/pkg/config"
-	"github.com/go-crm/services/pkg/events"
+	"github.com/Autonex009/autonex-crm-api/internal/integrations/google"
+	"github.com/Autonex009/autonex-crm-api/internal/integrations/slack"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/events"
 	"github.com/nats-io/nats.go"
 	"golang.org/x/oauth2"
 )

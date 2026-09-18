@@ -14,7 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/pkg/mailer"
+	"github.com/Autonex009/autonex-crm-api/pkg/mailer"
 )
 
 // sendTimeout bounds the background delivery. The HTTP request that triggered it

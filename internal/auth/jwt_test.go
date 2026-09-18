@@ -6,7 +6,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 func TestIssueAccessToken(t *testing.T) {

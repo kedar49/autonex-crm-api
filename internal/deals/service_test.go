@@ -3,8 +3,8 @@ package deals
 import (
 	"testing"
 
-	"github.com/go-crm/services/internal/leads"
-	"github.com/go-crm/services/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/internal/leads"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
 )
 
 func ptr[T any](v T) *T { return &v }

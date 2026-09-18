@@ -1,4 +1,4 @@
-module github.com/go-crm/services
+module github.com/Autonex009/autonex-crm-api
 
 go 1.25.0
 

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/go-crm/services/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
 )
 
 // Rule maps one of a module's sentinel errors to the status and message the

@@ -9,11 +9,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/internal/activities"
-	"github.com/go-crm/services/internal/integrations"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
-	"github.com/go-crm/services/pkg/paging"
+	"github.com/Autonex009/autonex-crm-api/internal/activities"
+	"github.com/Autonex009/autonex-crm-api/internal/integrations"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/pkg/paging"
 )
 
 // Handler exposes the leads module's HTTP API.

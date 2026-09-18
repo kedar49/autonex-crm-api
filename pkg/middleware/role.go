@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/go-crm/services/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
 )
 
 // RequireRole rejects a request whose token's role claim is not one of

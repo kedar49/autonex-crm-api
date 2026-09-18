@@ -12,9 +12,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/internal/auth"
-	"github.com/go-crm/services/pkg/apperr"
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/internal/auth"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 // inviteTTL is how long an invitation link stays usable.

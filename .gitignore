@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+*.exe
+*.test
+vendor/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Coverage
+coverage.out
+coverage.html
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

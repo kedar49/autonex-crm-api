@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/oauth2"
 
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 // ssoIdentity is the normalized identity extracted from a provider's userinfo.

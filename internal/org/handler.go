@@ -6,10 +6,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/internal/auth"
-	"github.com/go-crm/services/pkg/config"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/internal/auth"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
 )
 
 // Handler exposes the organization/teammate HTTP API.

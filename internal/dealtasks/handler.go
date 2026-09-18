@@ -3,9 +3,9 @@ package dealtasks
 import (
 	"net/http"
 
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
 	"github.com/go-chi/chi/v5"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

@@ -12,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/pkg/config"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
 )
 
 const ssoStateCookie = "sso_state"
@@ -58,6 +58,48 @@ type credentials struct {
 type authResponse struct {
 	Token string `json:"token"`
 	User  User   `json:"user"`
+	// RefreshToken is returned only to a client that asked for token mode (see
+	// authModeHeader). omitempty keeps the browser's response byte-identical to
+	// what it was before native clients existed.
+	RefreshToken string `json:"refreshToken,omitempty"`
+}
+
+// authModeHeader lets a client ask for the refresh token in the response body
+// instead of in a cookie: "X-Auth-Mode: token".
+//
+// The native app has no dependable cookie jar across iOS and Android, and
+// SameSite means nothing outside a browser, so it holds the refresh token itself
+// (expo-secure-store) and sends it back on /refresh and /logout.
+//
+// Opt-in rather than sniffed from the User-Agent: defaulting to the body would
+// hand the long-lived credential to script in the browser and undo the whole
+// point of the HttpOnly cookie. A browser never sends this header by accident.
+const authModeHeader = "X-Auth-Mode"
+
+// wantsTokenBody reports whether the caller opted into token mode.
+func wantsTokenBody(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get(authModeHeader), "token")
+}
+
+// refreshTokenRequest is the token-mode body for /refresh and /logout.
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
+// readRefreshToken pulls the refresh token from the cookie, falling back to the
+// request body. The second return says whether it came from the cookie, which
+// decides whether a dead session is worth clearing a cookie for.
+func readRefreshToken(w http.ResponseWriter, r *http.Request) (raw string, fromCookie bool) {
+	if c, err := r.Cookie(RefreshCookieName); err == nil && c.Value != "" {
+		return c.Value, true
+	}
+	// No cookie: a native client sends the token in the body instead. A missing
+	// or unparseable body is not an error here — the caller reports "no session".
+	var in refreshTokenRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&in)
+	}
+	return strings.TrimSpace(in.RefreshToken), false
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +125,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not create account")
 		return
 	}
-	h.writeSession(w, http.StatusCreated, session)
+	h.writeSession(w, http.StatusCreated, session, wantsTokenBody(r))
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +142,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "login failed")
 		return
 	}
-	h.writeSession(w, http.StatusOK, session)
+	h.writeSession(w, http.StatusOK, session, wantsTokenBody(r))
 }
 
 func (h *Handler) ssoStart(w http.ResponseWriter, r *http.Request) {
@@ -189,16 +231,22 @@ func (h *Handler) ssoCallback(w http.ResponseWriter, r *http.Request) {
 // refresh rotates the session. The old refresh token is spent by this call, so a
 // client must use the value returned here from now on.
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(RefreshCookieName)
-	if err != nil || cookie.Value == "" {
+	raw, fromCookie := readRefreshToken(w, r)
+	if raw == "" {
 		httpx.WriteError(w, http.StatusUnauthorized, "no session")
 		return
 	}
+	// A token that arrived in the body has to leave in the body: the client that
+	// sent it that way has nowhere to read a cookie from. The explicit header
+	// still works for a client that wants token mode from the very first call.
+	tokenInBody := !fromCookie || wantsTokenBody(r)
 
-	session, err := h.svc.Refresh(r.Context(), cookie.Value)
+	session, err := h.svc.Refresh(r.Context(), raw)
 	if errors.Is(err, ErrInvalidRefresh) {
-		// Clear the dead cookie so the browser stops sending it.
-		ClearRefreshCookie(w, h.cfg)
+		if fromCookie {
+			// Clear the dead cookie so the browser stops sending it.
+			ClearRefreshCookie(w, h.cfg)
+		}
 		httpx.WriteError(w, http.StatusUnauthorized, "session expired")
 		return
 	}
@@ -206,14 +254,17 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, http.StatusInternalServerError, "could not refresh the session")
 		return
 	}
-	h.writeSession(w, http.StatusOK, session)
+	h.writeSession(w, http.StatusOK, session, tokenInBody)
 }
 
 // logout revokes the refresh token server-side, so the session is dead even if a
 // copy of the cookie survives somewhere.
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(RefreshCookieName); err == nil {
-		if err := h.svc.Logout(r.Context(), cookie.Value); err != nil {
+	// Same two sources as /refresh: the browser's cookie, or a native client's
+	// body. Revoking server-side is what actually ends the session, so it must
+	// work for both.
+	if raw, _ := readRefreshToken(w, r); raw != "" {
+		if err := h.svc.Logout(r.Context(), raw); err != nil {
 			httpx.WriteError(w, http.StatusInternalServerError, "could not sign out")
 			return
 		}
@@ -222,13 +273,23 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeSession sets the refresh cookie and returns the access token in the body.
-// The split is deliberate: the refresh token is the long-lived credential and
-// stays out of reach of script, while the access token is short-lived and held in
-// memory by the SPA.
-func (h *Handler) writeSession(w http.ResponseWriter, status int, session Session) {
-	SetRefreshCookie(w, h.cfg, session.RefreshToken, session.RefreshExpiresAt)
-	httpx.WriteJSON(w, status, authResponse{Token: session.AccessToken, User: session.User})
+// writeSession returns the access token in the body and delivers the refresh
+// token the way this client can hold it.
+//
+// Browser: the refresh token goes in an HttpOnly cookie and never touches the
+// body, so script cannot read the long-lived credential. Native client
+// (tokenInBody): it goes in the body and no cookie is set — there is no jar to
+// put one in, and a stray Set-Cookie would only be noise on the wire.
+//
+// The access token is short-lived and held in memory either way.
+func (h *Handler) writeSession(w http.ResponseWriter, status int, session Session, tokenInBody bool) {
+	resp := authResponse{Token: session.AccessToken, User: session.User}
+	if tokenInBody {
+		resp.RefreshToken = session.RefreshToken
+	} else {
+		SetRefreshCookie(w, h.cfg, session.RefreshToken, session.RefreshExpiresAt)
+	}
+	httpx.WriteJSON(w, status, resp)
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {

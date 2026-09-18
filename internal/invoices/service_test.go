@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-crm/services/pkg/apperr"
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
 )
 
 func ptr[T any](v T) *T { return &v }

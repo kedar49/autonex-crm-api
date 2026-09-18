@@ -7,11 +7,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/go-crm/services/internal/activities"
-	"github.com/go-crm/services/internal/pdf"
-	"github.com/go-crm/services/pkg/httpx"
-	"github.com/go-crm/services/pkg/middleware"
-	"github.com/go-crm/services/pkg/paging"
+	"github.com/Autonex009/autonex-crm-api/internal/activities"
+	"github.com/Autonex009/autonex-crm-api/internal/pdf"
+	"github.com/Autonex009/autonex-crm-api/pkg/httpx"
+	"github.com/Autonex009/autonex-crm-api/pkg/middleware"
+	"github.com/Autonex009/autonex-crm-api/pkg/paging"
 )
 
 // Handler exposes the quotes module's HTTP API.

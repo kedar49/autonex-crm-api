@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/oauth2"
 
-	"github.com/go-crm/services/internal/integrations/google"
-	"github.com/go-crm/services/pkg/config"
+	"github.com/Autonex009/autonex-crm-api/internal/integrations/google"
+	"github.com/Autonex009/autonex-crm-api/pkg/config"
 )
 
 // Service owns the connected accounts and the actions performed through them.
