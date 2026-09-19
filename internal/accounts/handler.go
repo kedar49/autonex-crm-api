@@ -34,6 +34,12 @@ func (h *Handler) Routes() chi.Router {
 	r.Delete("/{id}", h.remove)
 	r.Get("/{id}/profile", h.getProfile)
 	r.Put("/{id}/profile", h.updateProfile)
+	// A company's sites. Nested under the account because that is what owns
+	// them, and because the org check runs through the account.
+	r.Get("/{id}/locations", h.listLocations)
+	r.Post("/{id}/locations", h.createLocation)
+	r.Put("/{id}/locations/{locationId}", h.updateLocation)
+	r.Delete("/{id}/locations/{locationId}", h.archiveLocation)
 	return r
 }
 

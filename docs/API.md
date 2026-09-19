@@ -87,11 +87,16 @@ SSO is restricted by `SSO_ALLOWED_DOMAINS`; new SSO users join `SSO_DEFAULT_ORG_
 | PATCH | `/{id}/move` | `stage`, `index` | `Deal` · emails the org |
 
 **Input** — `title`, `description?`, `remark?`, `amount`, `stage`, `ownerUserId?`,
-`contactId?`, `accountId?`, `leadId?`, `expectedCloseDate?`
+`contactId?`, `accountId?`, `leadId?`, `expectedCloseDate?`, `locationIds?`
 
 **Deal** — `id`, `title`, `description`, `amount`, `stage`, `ownerUserId`, `ownerName`,
 `ownerEmail`, `contactId`, `contactName`, `accountId`, `expectedCloseDate`, `position`,
-`remark`, `createdAt`, `updatedAt`
+`remark`, `locationIds`, `createdAt`, `updatedAt`
+
+`locationIds` are ids from the deal's account under
+[`/accounts/{id}/locations`](#locations-sites--accountsidlocations) — the sites
+this deal delivers to. A deal can name several. Sending the field replaces the
+whole set; omitting it leaves the existing links alone.
 
 `stage`: `discovery`, `site_assessment`, `quote_sent`, `negotiation`, `delivery`,
 `post_delivery`, `won`
@@ -120,6 +125,33 @@ SSO is restricted by `SSO_ALLOWED_DOMAINS`; new SSO users join `SSO_DEFAULT_ORG_
 
 **Profile input** — account fields plus `tagline?`, `description?`, `primaryColor?`,
 `bannerUrl?`, `plantLocations?`, `aiDetections?`, `hardwareSpecs?`, `amcStatus?`
+
+### Locations (sites) — `/accounts/{id}/locations`
+
+A company's physical sites. A deal names one or more of them, so a site is never
+hard-deleted while work still points at it — it is archived instead.
+
+| Method | Path | Body / Params | Returns |
+| --- | --- | --- | --- |
+| GET | `/{id}/locations` | `includeArchived?` = `true` | `{ items: Location[] }`, live sites first |
+| POST | `/{id}/locations` | `LocationInput` | `Location` · `201` · `409` on a duplicate name |
+| PUT | `/{id}/locations/{locationId}` | `LocationInput` | `Location` · `404` · `409` |
+| DELETE | `/{id}/locations/{locationId}` | `archived?` = `false` to restore | `Location` · `200`, **not** `204` |
+
+**LocationInput** — `name` (required, ≤200 chars), `city?`, `address?`,
+`spocName?`, `spocPhone?`
+
+**Location** — `id`, `accountId`, `name`, `city`, `address`, `spocName`,
+`spocPhone`, `position`, `archivedAt`, `dealCount`
+
+Three things that differ from the rest of this API:
+
+- `DELETE` **archives** and returns the updated `Location` with `200`. It does
+  not return `204` and it does not remove the row. Pass `?archived=false` to the
+  same route to restore.
+- `dealCount` counts live deals linked through `deal_locations`, so the UI can
+  show the consequence before someone archives a site.
+- Location names are unique per company; a clash is `409`, not `400`.
 
 ---
 
