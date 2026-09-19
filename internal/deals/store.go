@@ -45,8 +45,13 @@ type Deal struct {
 	LeadName *string `json:"leadName"`
 	// What is being deployed on this deal. Free text for products and location:
 	// the catalogue is not modelled, and a site list is rarely one tidy value.
-	TotalCameras      *int       `json:"totalCameras"`
-	Location          *string    `json:"location"`
+	TotalCameras *int    `json:"totalCameras"`
+	Location     *string `json:"location"`
+	// LocationIDs are the company sites this deal delivers to. Location above
+	// holds their names joined with "; ", kept in step by the writes below —
+	// it is what the quote builder, the delivery sync and the sheet importer
+	// all read, so it cannot be allowed to go stale.
+	LocationIDs       []string   `json:"locationIds"`
 	Products          *string    `json:"products"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 	Position          float64    `json:"position"`
@@ -84,6 +89,10 @@ const dealColumns = `
 	d.lead_id::text            AS lead_id,
 	l.contact_name             AS lead_name,
 	d.total_cameras, d.location, d.products,
+	-- The sites this deal delivers to, in the order they were picked. An array
+	-- rather than a join, so one deal stays one row.
+	COALESCE((SELECT array_agg(dl.location_id::text ORDER BY dl.position, dl.created_at)
+	            FROM deal_locations dl WHERE dl.deal_id = d.id), '{}') AS location_ids,
 	d.expected_close_date,
 	(row_number() OVER (PARTITION BY d.stage ORDER BY d.created_at, d.id) * 1000)::float8,
 	d.created_at, d.updated_at`
@@ -141,12 +150,67 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error
 	if err != nil {
 		return Deal{}, translate(err)
 	}
+	if err := s.setLocations(ctx, id, in.LocationIDs, in.Location); err != nil {
+		return Deal{}, err
+	}
 	d, err := s.get(ctx, orgID, id)
 	if err != nil {
 		return Deal{}, err
 	}
 	s.markLeadConverted(ctx, in.LeadID)
 	return d, s.syncDelivery(ctx, orgID, d)
+}
+
+// setLocations replaces a deal's sites and rewrites deals.location to match.
+//
+// The text column is not a cache that can be allowed to drift: the quote
+// builder reads it to write "Deployment Site / Location:" into a quote, the
+// delivery tracker syncs from it, and the sheet importer writes it. So the
+// names are joined here, in the same transaction that sets the links, using
+// "; " — the separator the operations sheet already used for multi-site deals.
+//
+// When no sites are chosen the caller's own text is kept, which is what makes
+// the picker's "Other" escape hatch work: a site nobody has recorded yet is
+// still a site, and it belongs in the column rather than in the notes.
+func (s *store) setLocations(ctx context.Context, dealID string, ids []string, fallback *string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM deal_locations WHERE deal_id = $1`, dealID); err != nil {
+		return err
+	}
+
+	if len(ids) > 0 {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO deal_locations (deal_id, location_id, position)
+			 SELECT $1, v.id::uuid, v.ord - 1
+			   FROM unnest($2::text[]) WITH ORDINALITY AS v(id, ord)
+			  WHERE EXISTS (SELECT 1 FROM account_locations l WHERE l.id = v.id::uuid)
+			 ON CONFLICT DO NOTHING`, dealID, ids); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE deals d
+			    SET location = COALESCE((
+			          SELECT string_agg(l.name, '; ' ORDER BY dl.position, dl.created_at)
+			            FROM deal_locations dl
+			            JOIN account_locations l ON l.id = dl.location_id
+			           WHERE dl.deal_id = d.id), d.location)
+			  WHERE d.id = $1`, dealID); err != nil {
+			return err
+		}
+	} else if fallback != nil {
+		if _, err := tx.Exec(ctx,
+			`UPDATE deals SET location = $2 WHERE id = $1`, dealID, *fallback); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
 
 // markLeadConverted moves a linked lead to the converted stage.
@@ -191,6 +255,9 @@ func (s *store) update(ctx context.Context, orgID, id string, in Input) (Deal, e
 	}
 	if tag.RowsAffected() == 0 {
 		return Deal{}, ErrNotFound
+	}
+	if err := s.setLocations(ctx, id, in.LocationIDs, in.Location); err != nil {
+		return Deal{}, err
 	}
 	d, err := s.get(ctx, orgID, id)
 	if err != nil {
@@ -388,7 +455,7 @@ func scanDeal(row rowScanner) (Deal, error) {
 		&d.ID, &d.Title, &d.Description, &d.Amount, &d.Stage,
 		&d.OwnerUserID, &d.OwnerName, &d.OwnerEmail,
 		&d.ContactID, &d.ContactName,
-		&d.AccountID, &d.AccountName, &d.LeadID, &d.LeadName, &d.TotalCameras, &d.Location, &d.Products,
+		&d.AccountID, &d.AccountName, &d.LeadID, &d.LeadName, &d.TotalCameras, &d.Location, &d.Products, &d.LocationIDs,
 		&d.ExpectedCloseDate, &d.Position, &d.CreatedAt, &d.UpdatedAt)
 	if err != nil {
 		return Deal{}, translate(err)

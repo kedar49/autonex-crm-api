@@ -33,6 +33,7 @@ type Input struct {
 	LeadID            *string    `json:"leadId"`
 	TotalCameras      *int       `json:"totalCameras"`
 	Location          *string    `json:"location"`
+	LocationIDs       []string   `json:"locationIds"`
 	Products          *string    `json:"products"`
 	ExpectedCloseDate *time.Time `json:"expectedCloseDate"`
 }
@@ -200,6 +201,7 @@ func normalize(in Input) Input {
 	in.ContactID = trimmedOrNil(in.ContactID)
 	in.AccountID = trimmedOrNil(in.AccountID)
 	in.Location = trimmedOrNil(in.Location)
+
 	in.Products = trimmedOrNil(in.Products)
 
 	in.Stage = NormalizeStage(in.Stage)
