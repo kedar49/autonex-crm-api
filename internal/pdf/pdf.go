@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"strings"
 )
 
 type InvoiceData struct {
@@ -456,17 +455,4 @@ func (g *Generator) GeneratePOHTML(ctx context.Context, data POData) (io.Reader,
 	}
 
 	return &buf, nil
-}
-
-// ConvertNumberToWords converting integer amounts to Indian currency words
-func ConvertNumberToWords(amount float64) string {
-	val := int64(amount)
-	if val == 0 {
-		return "Rupees Zero Only"
-	}
-	return fmt.Sprintf("Rupees %s Only", strings.Title(convertUnderThousand(val)))
-}
-
-func convertUnderThousand(n int64) string {
-	return fmt.Sprintf("%d", n)
 }

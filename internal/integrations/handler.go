@@ -145,11 +145,3 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request, provider, err
 	}
 	http.Redirect(w, r, base+"?"+q.Encode(), http.StatusFound)
 }
-
-// writeErr maps the module's errors onto status codes.
-func writeErr(w http.ResponseWriter, err error, fallback string) {
-	httpx.WriteDomainError(w, err, fallback,
-		httpx.Rule{Err: ErrNotConnected, Status: http.StatusPreconditionRequired,
-			Message: "connect your Google account first"},
-	)
-}

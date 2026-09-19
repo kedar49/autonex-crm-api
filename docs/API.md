@@ -95,8 +95,20 @@ SSO is restricted by `SSO_ALLOWED_DOMAINS`; new SSO users join `SSO_DEFAULT_ORG_
 
 `locationIds` are ids from the deal's account under
 [`/accounts/{id}/locations`](#locations-sites--accountsidlocations) — the sites
-this deal delivers to. A deal can name several. Sending the field replaces the
-whole set; omitting it leaves the existing links alone.
+this deal delivers to. A deal can name several.
+
+`PUT /deals/{id}` is a **full replace**, so the field behaves like every other
+one on it: sending a list replaces the set, sending `[]` or omitting the field
+clears it. A client that reads a deal, changes one field and puts it back must
+send `locationIds` along with the rest or the deal loses its sites.
+
+Every id must name a site of **this deal's own account**; one that does not is
+`400`, not a silent skip. Duplicates are collapsed rather than rejected.
+
+`location` on the deal is kept in step: it holds the chosen sites' names joined
+with `"; "`, and falls back to the free-text `location` in the request when
+there are no sites. It is not decorative — the delivery tracker copies it and
+matches trackers to deals by comparing it.
 
 `stage`: `discovery`, `site_assessment`, `quote_sent`, `negotiation`, `delivery`,
 `post_delivery`, `won`
