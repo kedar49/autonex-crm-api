@@ -55,7 +55,7 @@ func main() {
 		Password: cfg.SMTPPassword,
 		From:     cfg.SMTPFrom,
 		FromName: cfg.SMTPFromName,
-	}), cfg.WebAppURL)
+	}), cfg.WebAppURL, cfg.ExpoAccessToken)
 
 	// Third-party connections (Google Calendar) and the meeting booking they enable.
 	meetings := integrations.NewService(pool, cfg)

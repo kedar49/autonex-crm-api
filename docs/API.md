@@ -316,10 +316,38 @@ counts. `attention` items: `kind`, `id`, `label`, `detail`, `days`, `amount`.
 | POST | `/read-all` | — | `204` |
 | POST | `/subscribe` | `endpoint`, `p256dh`, `auth`, `userAgent?` | `201` — web push |
 | DELETE | `/unsubscribe` | `endpoint` | `204` |
+| POST | `/devices` | `token`, `platform?`, `deviceName?` | `204` — native push |
+| DELETE | `/devices` | `token` | `204` |
 | GET | `/stream` | — | `text/event-stream` (SSE, live delivery) |
 
 **Item** — `id`, `orgId`, `userId`, `type`, `title`, `body`, `actionUrl`, `priority`,
 `isRead`, `createdAt`
+
+### Native push — `/devices`
+
+`/subscribe` and `/devices` are two different transports and do not share a row.
+`/subscribe` takes a **W3C Web Push** subscription (an endpoint plus an
+encryption keypair) which only a browser can produce. `/devices` takes a single
+opaque **Expo push token**, which is what a phone has.
+
+`token` must look like `ExponentPushToken[…]`; anything else is `400`. The token
+identifies the **installation, not the person** — registering a token already on
+file moves it to the calling user, so a colleague signing in on a shared handset
+takes over its notifications rather than both receiving them.
+
+The app re-registers on every launch; the call is idempotent. A token Expo
+reports as `DeviceNotRegistered` is deleted server-side on the next send, so an
+uninstalled app stops costing a request per notification.
+
+Every notification recorded for a user is pushed to their devices, carrying
+`data.notificationId`, `data.type`, `data.actionUrl` and `data.priority` so the
+app can route a tap without another round-trip, plus a `badge` set to the live
+unread count.
+
+Delivery is best-effort: the notification is durable once recorded and `GET /`
+will return it regardless, so a push failure is logged and never fails the
+action that triggered it. `EXPO_ACCESS_TOKEN` is optional and only needed when
+the Expo project has enhanced security enabled.
 
 ---
 
