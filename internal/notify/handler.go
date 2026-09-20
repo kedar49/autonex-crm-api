@@ -28,6 +28,10 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/read-all", h.markAllRead)
 	r.Post("/subscribe", h.subscribe)
 	r.Delete("/unsubscribe", h.unsubscribe)
+	// Native push. Separate from subscribe/unsubscribe above, which are Web Push
+	// (endpoint + encryption keypair) and mean nothing to a phone.
+	r.Post("/devices", h.registerDevice)
+	r.Delete("/devices", h.unregisterDevice)
 	r.Get("/stream", h.stream)
 
 	return r

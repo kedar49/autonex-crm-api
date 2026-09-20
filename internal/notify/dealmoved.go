@@ -40,15 +40,36 @@ type Notifier struct {
 	store     *Store
 	mail      mailer.Sender
 	webAppURL string
+	pusher    *Pusher
 }
 
-func New(pool *pgxpool.Pool, mail mailer.Sender, webAppURL string) *Notifier {
+func New(pool *pgxpool.Pool, mail mailer.Sender, webAppURL, expoAccessToken string) *Notifier {
+	store := NewStore(pool)
 	return &Notifier{
 		pool:      pool,
-		store:     NewStore(pool),
+		store:     store,
 		mail:      mail,
 		webAppURL: webAppURL,
+		pusher:    NewPusher(store, expoAccessToken),
 	}
+}
+
+// pushToDevices sends one recorded notification on to the user's phones.
+//
+// The badge is read back rather than counted in memory because the user may have
+// cleared notifications on another device between the insert and now, and a
+// badge that disagrees with the list is worse than no badge.
+//
+// Errors are swallowed inside Pusher.Push: the notification is already durable
+// and the app can list it, so a failure to nudge must not fail the deal move
+// that caused it.
+func (n *Notifier) pushToDevices(ctx context.Context, item NotificationItem) {
+	badge, err := n.store.UnreadCount(ctx, item.OrgID, item.UserID)
+	if err != nil {
+		log.Printf("notify: could not read unread count for %s: %v", item.UserID, err)
+		badge = 0
+	}
+	n.pusher.Push(ctx, item, badge)
 }
 
 func (n *Notifier) Store() *Store {
@@ -140,7 +161,7 @@ func (n *Notifier) recordDealMoved(ctx context.Context, orgID, actorID string, m
 		if userID == actorID {
 			continue
 		}
-		if _, err := n.store.CreateNotification(ctx, NotificationItem{
+		item, err := n.store.CreateNotification(ctx, NotificationItem{
 			OrgID:     orgID,
 			UserID:    userID,
 			Type:      "deal_moved",
@@ -148,10 +169,12 @@ func (n *Notifier) recordDealMoved(ctx context.Context, orgID, actorID string, m
 			Body:      body,
 			ActionURL: "/deals",
 			Priority:  priority,
-		}); err != nil {
+		})
+		if err != nil {
 			log.Printf("notify: could not record deal %s notification: %v", mv.DealID, err)
 			return
 		}
+		n.pushToDevices(ctx, item)
 	}
 }
 

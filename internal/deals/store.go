@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autonex009/autonex-crm-api/pkg/apperr"
 	"github.com/Autonex009/autonex-crm-api/pkg/database"
 	"github.com/jackc/pgx/v5"
 
@@ -172,7 +173,37 @@ func (s *store) create(ctx context.Context, orgID string, in Input) (Deal, error
 // When no sites are chosen the caller's own text is kept, which is what makes
 // the picker's "Other" escape hatch work: a site nobody has recorded yet is
 // still a site, and it belongs in the column rather than in the notes.
+// normalizeLocationIDs validates the ids a caller sent and collapses duplicates,
+// keeping first-seen order because a site's position is derived from it.
+//
+// Duplicates are dropped rather than rejected: sending the same site twice is a
+// harmless client slip, and ON CONFLICT would swallow the second copy anyway —
+// but it would also make the inserted-row tally disagree with the input length
+// and turn a legitimate save into a spurious "site does not belong here" error.
+func normalizeLocationIDs(ids []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(ids))
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		// Checked here rather than left to the ::uuid cast, which Postgres
+		// answers with an error and the caller sees as a 500.
+		if !database.IsUUID(id) {
+			return nil, apperr.Invalid("%q is not a valid location id", id)
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique, nil
+}
+
 func (s *store) setLocations(ctx context.Context, dealID string, ids []string, fallback *string) error {
+	unique, err := normalizeLocationIDs(ids)
+	if err != nil {
+		return err
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -184,30 +215,52 @@ func (s *store) setLocations(ctx context.Context, dealID string, ids []string, f
 		return err
 	}
 
-	if len(ids) > 0 {
+	if len(unique) == 0 {
+		// No sites: deals.location becomes the free-text value the caller sent,
+		// or nothing.
+		//
+		// It must not be left alone. delivery/link.go copies deals.location into
+		// the tracker and delivery/store.go matches trackers to deals by
+		// comparing that string, so keeping the names of sites the deal no
+		// longer has would quietly point the tracker at the wrong place.
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO deal_locations (deal_id, location_id, position)
-			 SELECT $1, v.id::uuid, v.ord - 1
-			   FROM unnest($2::text[]) WITH ORDINALITY AS v(id, ord)
-			  WHERE EXISTS (SELECT 1 FROM account_locations l WHERE l.id = v.id::uuid)
-			 ON CONFLICT DO NOTHING`, dealID, ids); err != nil {
+			`UPDATE deals SET location = $2 WHERE id = $1`, dealID, fallback); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE deals d
-			    SET location = COALESCE((
-			          SELECT string_agg(l.name, '; ' ORDER BY dl.position, dl.created_at)
-			            FROM deal_locations dl
-			            JOIN account_locations l ON l.id = dl.location_id
-			           WHERE dl.deal_id = d.id), d.location)
-			  WHERE d.id = $1`, dealID); err != nil {
-			return err
-		}
-	} else if fallback != nil {
-		if _, err := tx.Exec(ctx,
-			`UPDATE deals SET location = $2 WHERE id = $1`, dealID, *fallback); err != nil {
-			return err
-		}
+		return tx.Commit(ctx)
+	}
+
+	// JOINed to the deal's own account rather than merely checking the location
+	// exists. A site belongs to one company, so accepting any id that resolves
+	// would let a deal for one client be pointed at another client's plant — and
+	// then write that plant's name into deals.location, where the delivery
+	// tracker reads it.
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO deal_locations (deal_id, location_id, position)
+		 SELECT d.id, l.id, v.ord - 1
+		   FROM unnest($2::text[]) WITH ORDINALITY AS v(id, ord)
+		   JOIN deals d            ON d.id = $1
+		   JOIN account_locations l ON l.id = v.id::uuid AND l.account_id = d.account_id
+		 ON CONFLICT DO NOTHING`, dealID, unique)
+	if err != nil {
+		return err
+	}
+	// Anything the JOIN dropped was an id that does not name a site of this
+	// deal's company. Silently ignoring it would report success and save
+	// nothing, which is the worst of both.
+	if tag.RowsAffected() != int64(len(unique)) {
+		return apperr.Invalid("one or more of those sites do not belong to this deal's company")
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE deals d
+		    SET location = COALESCE((
+		          SELECT string_agg(l.name, '; ' ORDER BY dl.position, dl.created_at)
+		            FROM deal_locations dl
+		            JOIN account_locations l ON l.id = dl.location_id
+		           WHERE dl.deal_id = d.id), d.location)
+		  WHERE d.id = $1`, dealID); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

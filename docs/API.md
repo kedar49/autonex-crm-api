@@ -95,8 +95,20 @@ SSO is restricted by `SSO_ALLOWED_DOMAINS`; new SSO users join `SSO_DEFAULT_ORG_
 
 `locationIds` are ids from the deal's account under
 [`/accounts/{id}/locations`](#locations-sites--accountsidlocations) — the sites
-this deal delivers to. A deal can name several. Sending the field replaces the
-whole set; omitting it leaves the existing links alone.
+this deal delivers to. A deal can name several.
+
+`PUT /deals/{id}` is a **full replace**, so the field behaves like every other
+one on it: sending a list replaces the set, sending `[]` or omitting the field
+clears it. A client that reads a deal, changes one field and puts it back must
+send `locationIds` along with the rest or the deal loses its sites.
+
+Every id must name a site of **this deal's own account**; one that does not is
+`400`, not a silent skip. Duplicates are collapsed rather than rejected.
+
+`location` on the deal is kept in step: it holds the chosen sites' names joined
+with `"; "`, and falls back to the free-text `location` in the request when
+there are no sites. It is not decorative — the delivery tracker copies it and
+matches trackers to deals by comparing it.
 
 `stage`: `discovery`, `site_assessment`, `quote_sent`, `negotiation`, `delivery`,
 `post_delivery`, `won`
@@ -316,10 +328,38 @@ counts. `attention` items: `kind`, `id`, `label`, `detail`, `days`, `amount`.
 | POST | `/read-all` | — | `204` |
 | POST | `/subscribe` | `endpoint`, `p256dh`, `auth`, `userAgent?` | `201` — web push |
 | DELETE | `/unsubscribe` | `endpoint` | `204` |
+| POST | `/devices` | `token`, `platform?`, `deviceName?` | `204` — native push |
+| DELETE | `/devices` | `token` | `204` |
 | GET | `/stream` | — | `text/event-stream` (SSE, live delivery) |
 
 **Item** — `id`, `orgId`, `userId`, `type`, `title`, `body`, `actionUrl`, `priority`,
 `isRead`, `createdAt`
+
+### Native push — `/devices`
+
+`/subscribe` and `/devices` are two different transports and do not share a row.
+`/subscribe` takes a **W3C Web Push** subscription (an endpoint plus an
+encryption keypair) which only a browser can produce. `/devices` takes a single
+opaque **Expo push token**, which is what a phone has.
+
+`token` must look like `ExponentPushToken[…]`; anything else is `400`. The token
+identifies the **installation, not the person** — registering a token already on
+file moves it to the calling user, so a colleague signing in on a shared handset
+takes over its notifications rather than both receiving them.
+
+The app re-registers on every launch; the call is idempotent. A token Expo
+reports as `DeviceNotRegistered` is deleted server-side on the next send, so an
+uninstalled app stops costing a request per notification.
+
+Every notification recorded for a user is pushed to their devices, carrying
+`data.notificationId`, `data.type`, `data.actionUrl` and `data.priority` so the
+app can route a tap without another round-trip, plus a `badge` set to the live
+unread count.
+
+Delivery is best-effort: the notification is durable once recorded and `GET /`
+will return it regardless, so a push failure is logged and never fails the
+action that triggered it. `EXPO_ACCESS_TOKEN` is optional and only needed when
+the Expo project has enhanced security enabled.
 
 ---
 

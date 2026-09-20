@@ -72,6 +72,11 @@ type Config struct {
 	SMTPPassword string
 	SMTPFrom     string
 	SMTPFromName string
+
+	// ExpoAccessToken authenticates pushes to Expo. Optional: Expo only requires
+	// it when the project has enhanced security enabled, and an empty value is
+	// the normal case — push still works without it.
+	ExpoAccessToken string
 }
 
 // knownProviders is the set of OIDC providers whose endpoints the auth module
@@ -105,6 +110,7 @@ func Load() Config {
 		SMTPPassword:      getenv("SMTP_PASSWORD", ""),
 		SMTPFrom:          getenv("SMTP_FROM", ""),
 		SMTPFromName:      getenv("SMTP_FROM_NAME", "go-CRM"),
+		ExpoAccessToken:   getenv("EXPO_ACCESS_TOKEN", ""),
 	}
 }
 
